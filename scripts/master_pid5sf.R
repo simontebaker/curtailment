@@ -14,6 +14,9 @@ data_file <- "pid-5-sf_data_for_curtailment_84_13.csv"
 # Set output base directory
 output_base_dir <- "/Users/simonbaker/GitHub/curtailment/output"
 
+# Set output subdirectory name (e.g., the assessment's abbreviated name)
+output_sub_dir <- "pid5sf"
+
 # ============================================================================
 # Initial Setup (Do Not Edit)
 # ============================================================================
@@ -26,7 +29,7 @@ run_timestamp <- format(Sys.time(), "%Y-%m-%d-%H%M")
 run_name <- paste0("curtailment_", run_timestamp)
 
 # Create output directory for this assessment and this run
-output_dir <- file.path(output_base_dir, "pid5sf")
+output_dir <- file.path(output_base_dir, output_sub_dir)
 if (!dir.exists(output_dir)) {
   dir.create(output_dir, recursive = TRUE)
 }
@@ -251,7 +254,7 @@ config_module_2 <- create_analysis_config(
   two_step_mode = TRUE,
   top_candidates = 4, # top_candidates = 15,
   constraints = list(
-    stop_low_only = FALSE,
+    stop_low_only = TRUE,
     min_items_per_construct = 1,
     complete_triggered_constructs = FALSE
   ),
@@ -266,12 +269,12 @@ print.curtailment_config(config_module_2)
 #   list(gamma_0 = 0.95, gamma_1 = 1.00),
 #   list(gamma_0 = 0.99, gamma_1 = 1.00)
 # )
-# gamma_values <- list(
-#   list(gamma_0 = 0.95, gamma_1 = 1.00)
-# )
 gamma_values <- list(
-  list(gamma_0 = 0.95, gamma_1 = 0.95)
+  list(gamma_0 = 0.95, gamma_1 = 1.00)
 )
+# gamma_values <- list(
+#   list(gamma_0 = 0.95, gamma_1 = 0.95)
+# )
 
 # Generate combinations with custom gamma values
 method_combinations <- generate_method_combinations(
@@ -748,9 +751,9 @@ if (supports_optimization) {
         fnr_threshold_high_prevalence = 0.05,  # Maximum fnr for high prevalence constructs
         fnr_threshold_low_prevalence = 0.05,   # Maximum fnr for low prevalence constructs
         gamma_0_high_prevalence = 0.70,  # Minimum gamma_0 for high prevalence constructs
-        gamma_1_high_prevalence = 0.70,  # Minimum gamma_1 for high prevalence constructs
+        gamma_1_high_prevalence = 1.00,  # Minimum gamma_1 for high prevalence constructs
         gamma_0_low_prevalence = 0.80,   # Minimum gamma_0 for low prevalence constructs
-        gamma_1_low_prevalence = 0.80,   # Minimum gamma_1 for low prevalence constructs
+        gamma_1_low_prevalence = 1.00,   # Minimum gamma_1 for low prevalence constructs
         gamma_search_step = 0.01,        # Step size for binary search
         use_parallel = TRUE
       ),
