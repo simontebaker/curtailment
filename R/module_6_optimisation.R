@@ -37,7 +37,7 @@ optimize_method <- function(
   }
   
   # Load required modules
-  cat("Loading required module functions...\n")
+  cat("\nLoading required module functions...\n")
   source(file.path(code_dir, "module_4_item_reduction.R"))
   source(file.path(code_dir, "module_5_evaluation.R"))
   
