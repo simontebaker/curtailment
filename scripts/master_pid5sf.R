@@ -2,14 +2,17 @@
 # Set Directory Paths and Input Data File Name
 # ============================================================================
 
-# Set code directory (where this script and module scripts are located)
-code_dir <- "/Users/simonbaker/GitHub/sandbox/R"
+# Set code directory (where the module scripts are located)
+code_dir <- "/Users/simonbaker/GitHub/curtailment/R"
 
 # Set data directory (where the data file is located)
-data_dir <- "/Users/simonbaker/GitHub/sandbox/R/data_for_curtailment"
+data_dir <- "/Users/simonbaker/GitHub/curtailment/data"
 
 # Set data file name
 data_file <- "pid-5-sf_data_for_curtailment_84_13.csv"
+
+# Set output base directory
+output_base_dir <- "/Users/simonbaker/GitHub/curtailment/output"
 
 # ============================================================================
 # Initial Setup (Do Not Edit)
@@ -20,14 +23,14 @@ data_path <- file.path(data_dir, data_file)
 
 # Create datetime for this run
 run_timestamp <- format(Sys.time(), "%Y-%m-%d-%H%M")
-run_name <- paste0("pid5sf_curtailment_", run_timestamp) # "curtailment_"
+run_name <- paste0("curtailment_", run_timestamp)
 
-# Create output directory for this run
-output_base_dir <- file.path(code_dir, "pid5sf_curtailment_output") # "curtailment_output"
-if (!dir.exists(output_base_dir)) {
-  dir.create(output_base_dir, recursive = TRUE)
+# Create output directory for this assessment and this run
+output_dir <- file.path(output_base_dir, "pid5sf")
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
 }
-run_dir <- file.path(output_base_dir, run_name)
+run_dir <- file.path(output_dir, run_name)
 dir.create(run_dir, recursive = TRUE)
 
 # Set working directory to the run directory
@@ -66,6 +69,7 @@ source(file.path(code_dir, "module_4_item_reduction.R"))
 source(file.path(code_dir, "module_5_evaluation.R"))
 source(file.path(code_dir, "module_6_optimisation.R"))
 source(file.path(code_dir, "module_7_deployment.R"))
+source(file.path(code_dir, "module_8_deployment_validation.R"))
 cat("Modules loaded successfully.\n")
 
 # ============================================================================
@@ -242,10 +246,10 @@ cat("======================================\n\n")
 cat("Creating analysis configuration...\n\n")
 config_module_2 <- create_analysis_config(
   questionnaire_type = prepared_data$config$questionnaire_type,
-  ordering_methods = c("original", "auc", "incremental_auc", "correlation", "forward_stepwise"),
-  reduction_methods = c("none", "dc", "sc_ep"),
+  ordering_methods = c("original", "incremental_auc"), # ordering_methods = c("original", "auc", "incremental_auc", "correlation", "forward_stepwise"),
+  reduction_methods = c("none", "sc_ep"), # reduction_methods = c("none", "dc", "sc_ep"),
   two_step_mode = TRUE,
-  top_candidates = 15,
+  top_candidates = 4, # top_candidates = 15,
   constraints = list(
     stop_low_only = FALSE,
     min_items_per_construct = 1,
@@ -755,7 +759,7 @@ if (supports_optimization) {
     optimization_performed <- TRUE
   } else {
     # Do not run optimization
-    cat("Skipping optimization.\n")
+    cat("\nSkipping optimization.\n")
     optimization_performed <- FALSE
   }
 } else {
@@ -937,6 +941,30 @@ if (optimization_performed) {
 
 # ============================================================================
 # End of Module 7
+# ============================================================================
+
+# ============================================================================
+# Module 8: Deployment Validation Module
+# ============================================================================
+# Purpose: Validate deployment artifacts by simulating the deployed questionnaire
+#          and comparing actual performance to predicted performance
+# ============================================================================
+
+cat("\n==============================================\n")
+cat("=== Module 8: Deployment Validation Module ===\n")
+cat("==============================================\n\n")
+
+deployment_validation <- run_deployment_validation(
+  deployment_package,
+  prepared_data,
+  evaluation_results,
+  optimization_results,
+  run_full_validation = TRUE,
+  output_dir = "deployment_validation"
+)
+
+# ============================================================================
+# End of Module 8
 # ============================================================================
 
 # # ============================================================================
