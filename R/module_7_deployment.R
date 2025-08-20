@@ -472,11 +472,12 @@ calculate_dc_boundaries <- function(ordered_items, training_params, cutoff) {
         high_boundary[k] <- NA
       }
     }
-    
-  } else {
-    # Last item - simple cutoff
-    low_boundary[k] <- cutoff - 1
-    high_boundary[k] <- cutoff
+  }
+  
+  # Handle the last item - simple cutoff
+  if (n_items > 0) {
+    low_boundary[n_items] <- cutoff - 1
+    high_boundary[n_items] <- cutoff
   }
   
   return(list(low_boundary = low_boundary, high_boundary = high_boundary))
