@@ -263,7 +263,7 @@ simulate_deployed_questionnaire <- function(boundary_tables, admin_sequence,
   ))
 }
 
-#' Simulate Single Respondent - Unidimensional
+#' Simulate Single Respondent - Unidimensional (FIXED - Consistent Terminology)
 #'
 #' @param respondent_idx Respondent index
 #' @param validation_data Validation data
@@ -278,6 +278,7 @@ simulate_unidimensional_respondent <- function(respondent_idx, validation_data, 
                                                cutoff) {
   
   current_sum <- 0
+  n_items <- length(ordered_items)
   
   for (k in seq_along(ordered_items)) {
     item <- ordered_items[k]
@@ -297,7 +298,7 @@ simulate_unidimensional_respondent <- function(respondent_idx, validation_data, 
         if (!is.na(boundary_val) && current_sum <= boundary_val) {
           return(list(
             items_used = k,
-            stop_reason = "low_risk_boundary",
+            stop_reason = "stopped_early_low_risk",
             classification = 0,
             final_sum = current_sum
           ))
@@ -310,7 +311,7 @@ simulate_unidimensional_respondent <- function(respondent_idx, validation_data, 
         if (!is.na(boundary_val) && current_sum >= boundary_val) {
           return(list(
             items_used = k,
-            stop_reason = "high_risk_boundary",
+            stop_reason = "stopped_early_high_risk",
             classification = 1,
             final_sum = current_sum
           ))
@@ -319,17 +320,17 @@ simulate_unidimensional_respondent <- function(respondent_idx, validation_data, 
     }
   }
   
-  # Completed all items
+  # Completed all items - no early stopping occurred
   final_classification <- ifelse(current_sum >= cutoff, 1, 0)
   return(list(
-    items_used = length(ordered_items),
-    stop_reason = "completed_all_items",
+    items_used = n_items,
+    stop_reason = "no_early_stopping",
     classification = final_classification,
     final_sum = current_sum
   ))
 }
 
-#' Simulate Single Respondent - Multi-construct (CORRECTED)
+#' Simulate Single Respondent - Multi-construct (FIXED - Clear Terminology)
 #'
 #' @param respondent_idx Respondent index
 #' @param validation_data Validation data
@@ -347,6 +348,7 @@ simulate_multicontruct_respondent <- function(respondent_idx, validation_data, b
   # Track progress for each construct
   construct_sums <- list()
   construct_items_given <- list()
+  construct_items_total <- list()
   construct_classifications <- list()
   construct_stopped <- list()
   
@@ -354,12 +356,14 @@ simulate_multicontruct_respondent <- function(respondent_idx, validation_data, b
   for (cn in names(prepared_data$config$constructs)) {
     construct_sums[[cn]] <- 0
     construct_items_given[[cn]] <- 0
+    construct_items_total[[cn]] <- length(prepared_data$config$constructs[[cn]])
     construct_classifications[[cn]] <- NA
     construct_stopped[[cn]] <- FALSE
   }
   
   total_items_given <- 0
-  final_stop_reason <- "completed_all_items"
+  num_constructs_stopped_early <- 0
+  total_constructs <- length(prepared_data$config$constructs)
   
   # Go through administration sequence
   for (k in seq_len(nrow(admin_sequence))) {
@@ -419,9 +423,25 @@ simulate_multicontruct_respondent <- function(respondent_idx, validation_data, b
     
     # Check if all constructs have stopped
     if (all(unlist(construct_stopped))) {
-      final_stop_reason <- "all_constructs_stopped"
       break
     }
+  }
+  
+  # Count how many constructs stopped early (before all their items were administered)
+  for (cn in names(prepared_data$config$constructs)) {
+    if (construct_stopped[[cn]] && 
+        construct_items_given[[cn]] < construct_items_total[[cn]]) {
+      num_constructs_stopped_early <- num_constructs_stopped_early + 1
+    }
+  }
+  
+  # Determine the stop reason with CLEAR, UNAMBIGUOUS terminology
+  if (num_constructs_stopped_early == total_constructs) {
+    final_stop_reason <- "all_constructs_stopped_early"
+  } else if (num_constructs_stopped_early > 0) {
+    final_stop_reason <- "some_constructs_stopped_early"
+  } else {
+    final_stop_reason <- "no_constructs_stopped_early"
   }
   
   # Classify any constructs that didn't stop early
@@ -441,7 +461,8 @@ simulate_multicontruct_respondent <- function(respondent_idx, validation_data, b
     stop_reason = final_stop_reason,
     classification = overall_classification,
     construct_classifications = construct_classifications,
-    construct_sums = construct_sums
+    construct_sums = construct_sums,
+    num_constructs_stopped_early = num_constructs_stopped_early
   ))
 }
 
@@ -655,7 +676,7 @@ assess_deployment_fidelity <- function(abs_diffs, pct_diffs) {
   ))
 }
 
-#' Validate Continuation Logic (SIMPLIFIED)
+#' Validate Continuation Logic (SIMPLIFIED - Updated for Clear Terminology)
 #'
 #' This simplified version validates that the simulation logic is working correctly
 #' rather than comparing to SurveyJS implementation
@@ -680,11 +701,17 @@ validate_continuation_logic_simplified <- function(simulation_results, boundary_
   # 1. Check that reduction methods produce early stopping
   reduction_method <- impl_params$method_combination$reduction
   if (reduction_method != "none") {
-    early_stop_rate <- 1 - (stop_reasons["completed_all_items"] %||% 0) / sum(stop_reasons)
+    # Count how many had some form of early stopping
+    early_stop_count <- sum(
+      stop_reasons[grepl("all_constructs_stopped_early|some_constructs_stopped_early|stopped_early", 
+                         names(stop_reasons))]
+    )
+    early_stop_rate <- early_stop_count / sum(stop_reasons)
     logic_checks$early_stopping_present <- early_stop_rate > 0
   } else {
-    # For no reduction, all should complete
-    logic_checks$all_completed <- all(simulation_results$stop_reasons == "completed_all_items")
+    # For no reduction, all should have no early stopping
+    logic_checks$all_no_early_stop <- all(grepl("no_early_stopping|no_constructs_stopped_early", 
+                                                simulation_results$stop_reasons))
   }
   
   # 2. Check that items used makes sense
@@ -863,7 +890,7 @@ generate_validation_reports <- function(deployment_performance, performance_comp
   }
 }
 
-#' Generate Validation Executive Summary
+#' Generate Validation Executive Summary (FULLY FIXED - Correct Terminology Throughout)
 #'
 #' @param performance_comparison Performance comparison
 #' @param continuation_validation Continuation validation
@@ -884,9 +911,13 @@ generate_validation_executive_summary <- function(performance_comparison, contin
   
   # Performance comparison status
   if (performance_comparison$comparison_available) {
+    baseline_label <- ifelse(performance_comparison$comparison_type == "optimized", 
+                             "Optimized", "Original")
+    
     summary_text <- paste0(summary_text,
                            "Performance Fidelity: ", 
-                           performance_comparison$fidelity_assessment$overall_fidelity, "\n")
+                           performance_comparison$fidelity_assessment$overall_fidelity, "\n",
+                           "Comparison Type: ", baseline_label, " vs Deployed\n")
   } else {
     summary_text <- paste0(summary_text,
                            "Performance Comparison: Not available (no baseline)\n")
@@ -897,32 +928,46 @@ generate_validation_executive_summary <- function(performance_comparison, contin
                          "Continuation Logic: ",
                          ifelse(continuation_validation$logic_validation_passed, "PASSED", "FAILED"), "\n\n")
   
-  # Key metrics comparison
+  # Key metrics comparison - FIXED to use baseline_label consistently
   if (performance_comparison$comparison_available) {
+    baseline_label <- ifelse(performance_comparison$comparison_type == "optimized", 
+                             "Optimized", "Original")
+    
     summary_text <- paste0(summary_text,
                            "KEY METRICS COMPARISON\n",
-                           "---------------------\n")
+                           "---------------------\n",
+                           sprintf("%-20s  %10s  %10s  %10s\n", "Metric", baseline_label, "Deployed", "Difference"))
     
     for (metric in c("fnr", "accuracy", "mean_items_used")) {
       if (!is.null(performance_comparison$absolute_differences[[metric]])) {
-        orig_val <- performance_comparison$original_performance[[metric]]
+        baseline_val <- performance_comparison$baseline_performance[[metric]]
         deploy_val <- performance_comparison$deployment_performance[[metric]]
         abs_diff <- performance_comparison$absolute_differences[[metric]]
         
         summary_text <- paste0(summary_text,
-                               sprintf("%-20s: Original = %6.3f, Deployed = %6.3f, Diff = %+.3f\n",
-                                       metric, orig_val, deploy_val, abs_diff))
+                               sprintf("%-20s  %10.3f  %10.3f  %+10.3f\n",
+                                       metric, baseline_val, deploy_val, abs_diff))
       }
     }
   }
   
-  # Critical issues
+  # Improvements section
+  if (length(performance_comparison$fidelity_assessment$improvements) > 0) {
+    summary_text <- paste0(summary_text,
+                           "\nPERFORMANCE IMPROVEMENTS\n",
+                           "------------------------\n")
+    for (improvement in performance_comparison$fidelity_assessment$improvements) {
+      summary_text <- paste0(summary_text, "✓ ", improvement, "\n")
+    }
+  }
+  
+  # Critical issues (only degradations)
   if (length(performance_comparison$fidelity_assessment$critical_issues) > 0) {
     summary_text <- paste0(summary_text,
-                           "\nCRITICAL ISSUES\n",
-                           "---------------\n")
+                           "\nCRITICAL ISSUES (Degradations)\n",
+                           "-------------------------------\n")
     for (issue in performance_comparison$fidelity_assessment$critical_issues) {
-      summary_text <- paste0(summary_text, "- ", issue, "\n")
+      summary_text <- paste0(summary_text, "✗ ", issue, "\n")
     }
   }
   
@@ -932,7 +977,7 @@ generate_validation_executive_summary <- function(performance_comparison, contin
                            "\nWARNINGS\n",
                            "--------\n")
     for (warning in performance_comparison$fidelity_assessment$warnings) {
-      summary_text <- paste0(summary_text, "- ", warning, "\n")
+      summary_text <- paste0(summary_text, "⚠ ", warning, "\n")
     }
   }
   
@@ -1075,7 +1120,7 @@ generate_detailed_comparison_report <- function(performance_comparison, output_d
   writeLines(html_content, report_file)
 }
 
-#' Generate Boundary Utilization Report
+#' Generate Boundary Utilization Report (FIXED - Clear Terminology)
 #'
 #' @param boundary_analysis Boundary analysis results
 #' @param output_dir Output directory
@@ -1088,15 +1133,20 @@ generate_boundary_utilization_report <- function(boundary_analysis, output_dir) 
     "==========================\n\n",
     "Total Respondents: ", boundary_analysis$utilization_summary$total_respondents, "\n\n",
     "STOPPING REASON DISTRIBUTION:\n",
-    "-----------------------------\n"
+    "-----------------------------\n",
+    "Clear categorization of early stopping patterns:\n",
+    "- all_constructs_stopped_early: ALL constructs reached stopping boundaries\n",
+    "- some_constructs_stopped_early: SOME (but not all) constructs reached stopping boundaries\n",
+    "- no_constructs_stopped_early: NO constructs stopped early (all items administered)\n\n"
   )
   
-  # Add stop reason statistics
+  # Add stop reason statistics with clear formatting
   for (reason in names(boundary_analysis$utilization_summary$stop_reason_counts)) {
     count <- boundary_analysis$utilization_summary$stop_reason_counts[[reason]]
     pct <- boundary_analysis$utilization_summary$stop_reason_percentages[[reason]]
+    
     report_text <- paste0(report_text,
-                          sprintf("%-25s: %4d (%5.1f%%)\n", reason, count, pct))
+                          sprintf("%-35s: %4d (%5.1f%%)\n", reason, count, pct))
   }
   
   # Boundary coverage by construct
@@ -1119,12 +1169,23 @@ generate_boundary_utilization_report <- function(boundary_analysis, output_dir) 
   
   for (reason in names(boundary_analysis$efficiency_by_reason)) {
     eff <- boundary_analysis$efficiency_by_reason[[reason]]
+    
     report_text <- paste0(report_text,
                           reason, ":\n",
                           "  Mean items:   ", sprintf("%.1f", eff$mean_items), "\n",
                           "  Median items: ", sprintf("%.1f", eff$median_items), "\n",
                           "  SD items:     ", sprintf("%.1f", eff$sd_items), "\n")
   }
+  
+  # Add interpretation note
+  report_text <- paste0(report_text,
+                        "\nINTERPRETATION:\n",
+                        "--------------\n",
+                        "The mean items used shows the average assessment length for each category.\n",
+                        "Lower mean items indicates more efficient curtailment.\n",
+                        "- 'all_constructs_stopped_early' should have the lowest mean items\n",
+                        "- 'some_constructs_stopped_early' should have intermediate mean items\n",
+                        "- 'no_constructs_stopped_early' should have the highest mean items (all items)\n")
   
   writeLines(report_text, report_file)
 }
@@ -1198,7 +1259,7 @@ generate_continuation_logic_report <- function(continuation_validation, output_d
   writeLines(report_text, report_file)
 }
 
-#' Generate Deployment Recommendations
+#' Generate Deployment Recommendations (FIXED - Recognizes Improvements)
 #'
 #' @param performance_comparison Performance comparison
 #' @param continuation_validation Continuation validation
@@ -1220,9 +1281,24 @@ generate_deployment_recommendations <- function(performance_comparison, continua
     performance_comparison$fidelity_assessment$overall_fidelity == "PASS"
   logic_ok <- continuation_validation$logic_validation_passed
   
+  # Check if we have improvements
+  has_improvements <- length(performance_comparison$fidelity_assessment$improvements) > 0
+  has_critical_issues <- length(performance_comparison$fidelity_assessment$critical_issues) > 0
+  
   if (performance_ok && logic_ok) {
     recommendations_text <- paste0(recommendations_text,
-                                   "✅ DEPLOYMENT RECOMMENDED\n\n",
+                                   "✅ DEPLOYMENT RECOMMENDED\n\n")
+    
+    if (has_improvements) {
+      recommendations_text <- paste0(recommendations_text,
+                                     "Performance improvements detected:\n")
+      for (improvement in performance_comparison$fidelity_assessment$improvements) {
+        recommendations_text <- paste0(recommendations_text, "  ✓ ", improvement, "\n")
+      }
+      recommendations_text <- paste0(recommendations_text, "\n")
+    }
+    
+    recommendations_text <- paste0(recommendations_text,
                                    "The deployment package has passed all validation checks.\n",
                                    "Performance metrics are within acceptable tolerances.\n\n",
                                    "Next steps:\n",
@@ -1231,10 +1307,37 @@ generate_deployment_recommendations <- function(performance_comparison, continua
                                    "3. Collect feedback from users\n",
                                    "4. Schedule periodic performance reviews\n")
   } else {
+    # Check why it failed
+    failure_reasons <- character()
+    
+    if (has_critical_issues) {
+      failure_reasons <- c(failure_reasons, "Performance degradations exceed acceptable thresholds")
+    }
+    
+    if (!logic_ok) {
+      failure_reasons <- c(failure_reasons, "Continuation logic validation failed")
+    }
+    
     recommendations_text <- paste0(recommendations_text,
-                                   "❌ DEPLOYMENT NOT RECOMMENDED\n",
-                                   "Critical issues must be resolved before deployment.\n",
+                                   "❌ DEPLOYMENT NOT RECOMMENDED\n\n",
+                                   "Reasons:\n")
+    
+    for (reason in failure_reasons) {
+      recommendations_text <- paste0(recommendations_text, "  • ", reason, "\n")
+    }
+    
+    recommendations_text <- paste0(recommendations_text,
+                                   "\nCritical issues must be resolved before deployment.\n",
                                    "See detailed reports for specific remediation steps.\n")
+    
+    # If there were also improvements, mention them
+    if (has_improvements) {
+      recommendations_text <- paste0(recommendations_text,
+                                     "\nNote: Some performance improvements were also detected:\n")
+      for (improvement in performance_comparison$fidelity_assessment$improvements) {
+        recommendations_text <- paste0(recommendations_text, "  ✓ ", improvement, "\n")
+      }
+    }
   }
   
   writeLines(recommendations_text, recommendations_file)
@@ -1280,29 +1383,36 @@ generate_validation_visualizations <- function(deployment_performance, performan
   }
 }
 
-#' Create Performance Comparison Plot
+#' Create Performance Comparison Plot (FIXED - Correct Terminology)
 #'
 #' @param performance_comparison Performance comparison results
 #' @return ggplot object
 create_performance_comparison_plot <- function(performance_comparison) {
   
+  # Determine the correct baseline label
+  baseline_label <- ifelse(performance_comparison$comparison_type == "optimized", 
+                           "Optimized", "Original")
+  
   # Prepare data for comparison
   metrics <- c("sensitivity", "specificity", "accuracy", "balanced_accuracy")
   
-  orig_values <- sapply(metrics, function(m) performance_comparison$original_performance[[m]])
+  baseline_values <- sapply(metrics, function(m) performance_comparison$baseline_performance[[m]])
   deploy_values <- sapply(metrics, function(m) performance_comparison$deployment_performance[[m]])
   
   plot_data <- data.frame(
     metric = rep(metrics, 2),
-    value = c(orig_values, deploy_values),
-    type = rep(c("Original", "Deployed"), each = length(metrics)),
+    value = c(baseline_values, deploy_values),
+    type = rep(c(baseline_label, "Deployed"), each = length(metrics)),
     stringsAsFactors = FALSE
   )
+  
+  # Set factor levels to control order in plot
+  plot_data$type <- factor(plot_data$type, levels = c(baseline_label, "Deployed"))
   
   p <- ggplot2::ggplot(plot_data, ggplot2::aes(x = metric, y = value, fill = type)) +
     ggplot2::geom_bar(stat = "identity", position = "dodge") +
     ggplot2::labs(
-      title = "Performance Comparison: Original vs Deployed",
+      title = paste("Performance Comparison:", baseline_label, "vs Deployed"),
       x = "Metric",
       y = "Value",
       fill = "Implementation"
