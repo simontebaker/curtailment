@@ -238,10 +238,18 @@ generate_stopping_boundaries <- function(method_results, prepared_data, output_d
       }
       
       # Get construct-specific training params if applicable
-      if (!is.null(training_params$by_construct) && 
-          construct_name %in% names(training_params$by_construct)) {
+      # For multi-construct, training params are indexed directly by construct name
+      construct_training_params <- NULL
+      
+      if (!is.null(training_params[[construct_name]])) {
+        # Standard multi-construct structure from reduce_multi_construct
+        construct_training_params <- training_params[[construct_name]]
+      } else if (!is.null(training_params$by_construct) && 
+                 construct_name %in% names(training_params$by_construct)) {
+        # Alternative structure with by_construct
         construct_training_params <- training_params$by_construct[[construct_name]]
       } else {
+        # Fallback: use full training_params (might work for single-construct within multi)
         construct_training_params <- training_params
       }
       
@@ -518,10 +526,20 @@ calculate_sc_boundaries <- function(ordered_items, training_params, method,
   
   if (method == "sc_ep") {
     # Use empirical lookup tables
-    lookup_tables <- training_params$lookup_tables
+    lookup_tables <- NULL
+    
+    # Check for lookup tables in various possible locations
+    if (!is.null(training_params$lookup_tables)) {
+      # Direct lookup tables (standard structure)
+      lookup_tables <- training_params$lookup_tables
+    } else if (!is.null(training_params$training_params) && 
+               !is.null(training_params$training_params$lookup_tables)) {
+      # Sometimes nested under training_params
+      lookup_tables <- training_params$training_params$lookup_tables
+    }
     
     if (is.null(lookup_tables)) {
-      warning("No lookup tables found for sc_ep method")
+      warning("No lookup tables found for sc_ep method in training parameters")
       return(list(low_boundary = low_boundary, high_boundary = high_boundary))
     }
     
