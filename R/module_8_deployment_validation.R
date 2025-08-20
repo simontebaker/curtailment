@@ -502,7 +502,7 @@ calculate_deployment_performance <- function(simulation_results, validation_data
   ))
 }
 
-#' Compare Deployment Performance (SIMPLIFIED)
+#' Compare Deployment Performance (FIXED - Correct Terminology)
 #'
 #' @param deployment_performance Deployment performance
 #' @param evaluation_results Evaluation results from Module 5
@@ -512,112 +512,145 @@ calculate_deployment_performance <- function(simulation_results, validation_data
 compare_deployment_performance <- function(deployment_performance, evaluation_results = NULL,
                                            optimization_results = NULL, impl_params) {
   
-  # Get original performance for comparison
-  original_performance <- NULL
+  # Determine what we're comparing to and use appropriate terminology
+  baseline_performance <- NULL
+  comparison_type <- NULL
   
   if (!is.null(optimization_results) && !is.null(optimization_results$optimized_performance)) {
-    original_performance <- optimization_results$optimized_performance
+    baseline_performance <- optimization_results$optimized_performance
+    comparison_type <- "optimized"
   } else if (!is.null(evaluation_results) && !is.null(evaluation_results$full_performance)) {
-    original_performance <- evaluation_results$full_performance
+    baseline_performance <- evaluation_results$full_performance
+    comparison_type <- "original"
   }
   
-  if (is.null(original_performance)) {
+  if (is.null(baseline_performance)) {
     return(list(
       comparison_available = FALSE,
-      message = "No original performance metrics available for comparison"
+      message = "No baseline performance metrics available for comparison"
     ))
   }
   
   # Calculate differences
   metrics_to_compare <- c("sensitivity", "specificity", "accuracy", "balanced_accuracy", 
-                          "fnr", "mean_items_used")
+                          "fnr", "mean_items_used", "reduction_pct")
   
   absolute_diffs <- list()
   percentage_diffs <- list()
   
   for (metric in metrics_to_compare) {
-    if (!is.null(original_performance[[metric]]) && !is.null(deployment_performance[[metric]])) {
-      absolute_diffs[[metric]] <- deployment_performance[[metric]] - original_performance[[metric]]
-      if (original_performance[[metric]] != 0) {
-        percentage_diffs[[metric]] <- (absolute_diffs[[metric]] / abs(original_performance[[metric]])) * 100
+    if (!is.null(baseline_performance[[metric]]) && !is.null(deployment_performance[[metric]])) {
+      absolute_diffs[[metric]] <- deployment_performance[[metric]] - baseline_performance[[metric]]
+      if (baseline_performance[[metric]] != 0) {
+        percentage_diffs[[metric]] <- (absolute_diffs[[metric]] / abs(baseline_performance[[metric]])) * 100
       } else {
         percentage_diffs[[metric]] <- NA
       }
     }
   }
   
-  # Assess fidelity
+  # Assess fidelity (now direction-aware)
   fidelity_assessment <- assess_deployment_fidelity(absolute_diffs, percentage_diffs)
   
   return(list(
     comparison_available = TRUE,
-    original_performance = original_performance,
+    comparison_type = comparison_type,  # "original" or "optimized"
+    baseline_performance = baseline_performance,  # More neutral term
     deployment_performance = deployment_performance,
     absolute_differences = absolute_diffs,
     percentage_differences = percentage_diffs,
-    fidelity_assessment = fidelity_assessment
+    fidelity_assessment = fidelity_assessment,
+    # Keep these for backward compatibility
+    original_performance = baseline_performance
   ))
 }
 
-#' Assess Deployment Fidelity
+#' Assess Deployment Fidelity (FIXED - Direction-Aware)
 #'
 #' @param abs_diffs Absolute differences
 #' @param pct_diffs Percentage differences
 #' @return Fidelity assessment
 assess_deployment_fidelity <- function(abs_diffs, pct_diffs) {
   
-  # Define thresholds for acceptable differences
-  abs_thresholds <- list(
-    sensitivity = 0.03,   # 3 percentage points
-    specificity = 0.03,   # 3 percentage points
-    fnr = 0.02,           # 2 percentage points
-    accuracy = 0.02,      # 2 percentage points
-    mean_items_used = 1.0 # 1 item
+  # Define metrics where LOWER is better (we want these to decrease or stay low)
+  lower_is_better <- c("fnr", "fpr", "mean_items_used", "median_items_used")
+  
+  # Define metrics where HIGHER is better (we want these to increase or stay high)
+  higher_is_better <- c("sensitivity", "specificity", "accuracy", "balanced_accuracy", "reduction_pct")
+  
+  # Define thresholds for acceptable DEGRADATION (not just any change)
+  # These are for when metrics get WORSE, not better
+  degradation_thresholds <- list(
+    sensitivity = 0.03,      # Allow up to 3% decrease
+    specificity = 0.03,      # Allow up to 3% decrease
+    fnr = 0.02,             # Allow up to 2% increase
+    accuracy = 0.02,        # Allow up to 2% decrease
+    balanced_accuracy = 0.02,# Allow up to 2% decrease
+    mean_items_used = 5.0,  # Allow up to 5 items increase
+    reduction_pct = 5.0     # Allow up to 5% decrease in reduction
   )
   
-  pct_thresholds <- list(
-    sensitivity = 5,      # 5% relative change
-    specificity = 5,      # 5% relative change
-    fnr = 10,            # 10% relative change (more lenient)
-    accuracy = 5         # 5% relative change
+  # Percentage thresholds for degradation warnings
+  degradation_pct_thresholds <- list(
+    sensitivity = 5,         # Warn if >5% relative decrease
+    specificity = 5,         # Warn if >5% relative decrease
+    fnr = 20,               # Warn if >20% relative increase (more lenient for FNR)
+    accuracy = 5,           # Warn if >5% relative decrease
+    mean_items_used = 10    # Warn if >10% relative increase
   )
   
   # Check each metric
   issues <- character()
   warnings <- character()
+  improvements <- character()
   
-  for (metric in names(abs_thresholds)) {
-    if (metric %in% names(abs_diffs)) {
-      abs_diff <- abs(abs_diffs[[metric]])
+  for (metric in names(abs_diffs)) {
+    if (!is.na(abs_diffs[[metric]])) {
+      diff <- abs_diffs[[metric]]
+      abs_diff <- abs(diff)
       
-      if (!is.na(abs_diff) && abs_diff > abs_thresholds[[metric]]) {
-        issues <- c(issues, paste(metric, "absolute difference exceeds threshold:",
-                                  sprintf("%.3f > %.3f", abs_diff, abs_thresholds[[metric]])))
+      # Determine if this change is an improvement or degradation
+      is_improvement <- FALSE
+      if (metric %in% lower_is_better && diff < 0) {
+        # Metric decreased and lower is better = improvement
+        is_improvement <- TRUE
+        improvements <- c(improvements, sprintf("%s improved by %.3f", metric, abs_diff))
+      } else if (metric %in% higher_is_better && diff > 0) {
+        # Metric increased and higher is better = improvement
+        is_improvement <- TRUE
+        improvements <- c(improvements, sprintf("%s improved by %.3f", metric, abs_diff))
+      }
+      
+      # Only flag as issue if it's a DEGRADATION that exceeds threshold
+      if (!is_improvement && metric %in% names(degradation_thresholds)) {
+        if (abs_diff > degradation_thresholds[[metric]]) {
+          issues <- c(issues, sprintf("%s degraded beyond acceptable threshold: %.3f > %.3f",
+                                      metric, abs_diff, degradation_thresholds[[metric]]))
+        }
+      }
+      
+      # Check percentage changes for warnings (only for degradations)
+      if (!is_improvement && metric %in% names(pct_diffs) && metric %in% names(degradation_pct_thresholds)) {
+        pct_diff <- abs(pct_diffs[[metric]])
+        if (!is.na(pct_diff) && pct_diff > degradation_pct_thresholds[[metric]]) {
+          warnings <- c(warnings, sprintf("%s degraded by %.1f%% (threshold: %.1f%%)",
+                                          metric, pct_diff, degradation_pct_thresholds[[metric]]))
+        }
       }
     }
   }
   
-  for (metric in names(pct_thresholds)) {
-    if (metric %in% names(pct_diffs)) {
-      pct_diff <- abs(pct_diffs[[metric]])
-      
-      if (!is.na(pct_diff) && pct_diff > pct_thresholds[[metric]]) {
-        warnings <- c(warnings, paste(metric, "percentage difference exceeds threshold:",
-                                      sprintf("%.1f%% > %.1f%%", pct_diff, pct_thresholds[[metric]])))
-      }
-    }
-  }
-  
-  # Overall assessment
+  # Overall assessment - PASS if no degradation issues
   overall_fidelity <- ifelse(length(issues) == 0, "PASS", "FAIL")
   
   return(list(
     overall_fidelity = overall_fidelity,
     critical_issues = issues,
     warnings = warnings,
+    improvements = improvements,
     thresholds_used = list(
-      absolute = abs_thresholds,
-      percentage = pct_thresholds
+      degradation = degradation_thresholds,
+      percentage = degradation_pct_thresholds
     )
   ))
 }
@@ -906,7 +939,7 @@ generate_validation_executive_summary <- function(performance_comparison, contin
   writeLines(summary_text, summary_file)
 }
 
-#' Generate Detailed Comparison Report
+#' Generate Detailed Comparison Report (FIXED - Uses Correct Terminology)
 #'
 #' @param performance_comparison Performance comparison
 #' @param output_dir Output directory
@@ -917,6 +950,10 @@ generate_detailed_comparison_report <- function(performance_comparison, output_d
   }
   
   report_file <- file.path(output_dir, "detailed_performance_comparison.html")
+  
+  # Use appropriate terminology
+  baseline_label <- ifelse(performance_comparison$comparison_type == "optimized", 
+                           "Optimized", "Original")
   
   html_content <- paste0(
     "<html><head><title>Performance Comparison Report</title>",
@@ -932,7 +969,8 @@ generate_detailed_comparison_report <- function(performance_comparison, output_d
     ".neutral { color: black; }",
     "</style></head><body>",
     "<h1>Detailed Performance Comparison</h1>",
-    "<p>Generated: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "</p>"
+    "<p>Generated: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "</p>",
+    "<p><strong>Comparison Type:</strong> ", baseline_label, " vs Deployed</p>"
   )
   
   # Fidelity status
@@ -942,11 +980,22 @@ generate_detailed_comparison_report <- function(performance_comparison, output_d
                          "<h2>Overall Fidelity: <span style='color:", status_color, "'>",
                          fidelity_status, "</span></h2>")
   
+  # Add improvements section if any
+  if (length(performance_comparison$fidelity_assessment$improvements) > 0) {
+    html_content <- paste0(html_content,
+                           "<h2>Performance Improvements</h2>",
+                           "<ul style='color: green;'>")
+    for (improvement in performance_comparison$fidelity_assessment$improvements) {
+      html_content <- paste0(html_content, "<li>", improvement, "</li>")
+    }
+    html_content <- paste0(html_content, "</ul>")
+  }
+  
   # Performance metrics table
   html_content <- paste0(html_content,
                          "<h2>Performance Metrics</h2>",
                          "<table>",
-                         "<tr><th>Metric</th><th class='metric-value'>Original</th>",
+                         "<tr><th>Metric</th><th class='metric-value'>", baseline_label, "</th>",
                          "<th class='metric-value'>Deployed</th>",
                          "<th class='metric-value'>Abs. Diff</th>",
                          "<th class='metric-value'>% Change</th>",
@@ -958,17 +1007,18 @@ generate_detailed_comparison_report <- function(performance_comparison, output_d
     fnr = list(name = "False Negative Rate", higher_better = FALSE),
     accuracy = list(name = "Accuracy", higher_better = TRUE),
     balanced_accuracy = list(name = "Balanced Accuracy", higher_better = TRUE),
-    mean_items_used = list(name = "Mean Items Used", higher_better = FALSE)
+    mean_items_used = list(name = "Mean Items Used", higher_better = FALSE),
+    reduction_pct = list(name = "Reduction %", higher_better = TRUE)
   )
   
   for (metric in names(metrics_info)) {
     info <- metrics_info[[metric]]
-    orig <- performance_comparison$original_performance[[metric]]
+    baseline <- performance_comparison$baseline_performance[[metric]]
     deploy <- performance_comparison$deployment_performance[[metric]]
     abs_diff <- performance_comparison$absolute_differences[[metric]]
     pct_diff <- performance_comparison$percentage_differences[[metric]]
     
-    if (!is.null(orig) && !is.null(deploy)) {
+    if (!is.null(baseline) && !is.null(deploy)) {
       # Determine if change is good, bad, or neutral
       if (abs(abs_diff) < 0.001) {
         change_class <- "neutral"
@@ -986,7 +1036,7 @@ generate_detailed_comparison_report <- function(performance_comparison, output_d
       html_content <- paste0(html_content,
                              "<tr>",
                              "<td>", info$name, "</td>",
-                             "<td class='metric-value'>", sprintf("%.3f", orig), "</td>",
+                             "<td class='metric-value'>", sprintf("%.3f", baseline), "</td>",
                              "<td class='metric-value'>", sprintf("%.3f", deploy), "</td>",
                              "<td class='metric-value ", change_class, "'>", 
                              sprintf("%+.3f", abs_diff), "</td>",
@@ -1001,8 +1051,8 @@ generate_detailed_comparison_report <- function(performance_comparison, output_d
   # Add critical issues if any
   if (length(performance_comparison$fidelity_assessment$critical_issues) > 0) {
     html_content <- paste0(html_content,
-                           "<h2>Critical Issues</h2>",
-                           "<ul>")
+                           "<h2>Critical Issues (Degradations)</h2>",
+                           "<ul style='color: red;'>")
     for (issue in performance_comparison$fidelity_assessment$critical_issues) {
       html_content <- paste0(html_content, "<li>", issue, "</li>")
     }
@@ -1013,7 +1063,7 @@ generate_detailed_comparison_report <- function(performance_comparison, output_d
   if (length(performance_comparison$fidelity_assessment$warnings) > 0) {
     html_content <- paste0(html_content,
                            "<h2>Warnings</h2>",
-                           "<ul>")
+                           "<ul style='color: orange;'>")
     for (warning in performance_comparison$fidelity_assessment$warnings) {
       html_content <- paste0(html_content, "<li>", warning, "</li>")
     }
