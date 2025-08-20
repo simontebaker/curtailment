@@ -890,7 +890,7 @@ generate_validation_reports <- function(deployment_performance, performance_comp
   }
 }
 
-#' Generate Validation Executive Summary (FULLY FIXED - Correct Terminology Throughout)
+#' Generate Validation Executive Summary (UPDATED - All Metrics)
 #'
 #' @param performance_comparison Performance comparison
 #' @param continuation_validation Continuation validation
@@ -928,7 +928,7 @@ generate_validation_executive_summary <- function(performance_comparison, contin
                          "Continuation Logic: ",
                          ifelse(continuation_validation$logic_validation_passed, "PASSED", "FAILED"), "\n\n")
   
-  # Key metrics comparison - FIXED to use baseline_label consistently
+  # Key metrics comparison - UPDATED to include all metrics
   if (performance_comparison$comparison_available) {
     baseline_label <- ifelse(performance_comparison$comparison_type == "optimized", 
                              "Optimized", "Original")
@@ -938,15 +938,30 @@ generate_validation_executive_summary <- function(performance_comparison, contin
                            "---------------------\n",
                            sprintf("%-20s  %10s  %10s  %10s\n", "Metric", baseline_label, "Deployed", "Difference"))
     
-    for (metric in c("fnr", "accuracy", "mean_items_used")) {
+    # Include ALL key metrics
+    metrics_to_show <- c("sensitivity", "specificity", "fnr", "accuracy", 
+                         "balanced_accuracy", "mean_items_used", "reduction_pct")
+    
+    for (metric in metrics_to_show) {
       if (!is.null(performance_comparison$absolute_differences[[metric]])) {
         baseline_val <- performance_comparison$baseline_performance[[metric]]
         deploy_val <- performance_comparison$deployment_performance[[metric]]
         abs_diff <- performance_comparison$absolute_differences[[metric]]
         
-        summary_text <- paste0(summary_text,
-                               sprintf("%-20s  %10.3f  %10.3f  %+10.3f\n",
-                                       metric, baseline_val, deploy_val, abs_diff))
+        # Format based on metric type
+        if (metric == "mean_items_used") {
+          summary_text <- paste0(summary_text,
+                                 sprintf("%-20s  %10.1f  %10.1f  %+10.1f\n",
+                                         metric, baseline_val, deploy_val, abs_diff))
+        } else if (metric == "reduction_pct") {
+          summary_text <- paste0(summary_text,
+                                 sprintf("%-20s  %9.1f%%  %9.1f%%  %+9.1f%%\n",
+                                         metric, baseline_val, deploy_val, abs_diff))
+        } else {
+          summary_text <- paste0(summary_text,
+                                 sprintf("%-20s  %10.3f  %10.3f  %+10.3f\n",
+                                         metric, baseline_val, deploy_val, abs_diff))
+        }
       }
     }
   }
