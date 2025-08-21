@@ -927,6 +927,7 @@ if (optimization_performed) {
     prepared_data = prepared_data,
     item_definitions = item_definitions,
     survey_config = survey_config,
+    use_pattern_boundaries = TRUE,  # NEW PARAMETER - TRUE (default) enables pattern-specific for SC-EP, FALSE  forces sum-score boundaries even for SC-EP
     output_dir = "deployment"
   )
 } else {
@@ -938,6 +939,7 @@ if (optimization_performed) {
     method_id = NULL, # if NULL, the recommended method will be used
     item_definitions = item_definitions,
     survey_config = survey_config,
+    use_pattern_boundaries = TRUE,  # NEW PARAMETER - TRUE (default) enables pattern-specific for SC-EP, FALSE  forces sum-score boundaries even for SC-EP
     output_dir = "deployment"
   )
 }
