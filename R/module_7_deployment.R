@@ -1,8 +1,9 @@
 # ============================================================================
-# Module 7: Deployment Module
+# Module 7: Deployment Module (ENHANCED WITH PATTERN-SPECIFIC SC-EP)
 # ============================================================================
 # Purpose: Generate deployment-ready outputs including stopping boundary tables
 #          and SurveyJS JSON configuration for clinical implementation
+#          NOW WITH: Full pattern-specific boundary support for SC-EP method
 # ============================================================================
 
 # Note on required packages:
@@ -137,7 +138,7 @@ validate_item_definitions <- function(item_definitions, ordered_items) {
   return(validation_results)
 }
 
-#' Generate Deployment Package
+#' Generate Deployment Package (ENHANCED)
 #'
 #' @param evaluation_results Results from Module 5 evaluation (optional if optimization_results provided)
 #' @param all_combination_results All method combination results from Module 4 (optional if optimization_results provided)
@@ -146,6 +147,7 @@ validate_item_definitions <- function(item_definitions, ordered_items) {
 #' @param method_id Specific method ID to deploy (NULL = use recommended/optimized)
 #' @param item_definitions List of item definitions with item_id, item_text, and rateValues
 #' @param survey_config List with survey configuration (title, description, autoGenerate, displayMode)
+#' @param use_pattern_boundaries For SC-EP, whether to use pattern-specific boundaries (default: TRUE)
 #' @param output_dir Output directory for deployment files
 #' @return List containing deployment artifacts
 #' @export
@@ -162,6 +164,7 @@ generate_deployment_package <- function(
       autoGenerate = FALSE,
       displayMode = "buttons"
     ),
+    use_pattern_boundaries = TRUE,  # NEW PARAMETER
     output_dir = "deployment"
 ) {
   
@@ -271,6 +274,17 @@ generate_deployment_package <- function(
     }
   }
   
+  # Check if we should use pattern-specific boundaries for SC-EP
+  pattern_rules <- NULL
+  if (reduction_method == "sc_ep" && use_pattern_boundaries) {
+    cat("  Generating pattern-specific boundaries for SC-EP...\n")
+    pattern_rules <- generate_pattern_rules(
+      method_results,
+      prepared_data,
+      output_dir
+    )
+  }
+  
   # Generate stopping boundary tables
   cat("  Generating stopping boundary tables...\n")
   boundary_tables <- generate_stopping_boundaries(
@@ -288,7 +302,7 @@ generate_deployment_package <- function(
     output_dir
   )
   
-  # Generate SurveyJS JSON
+  # Generate SurveyJS JSON (with pattern support if applicable)
   cat("  Generating SurveyJS JSON...\n")
   surveyjs_json <- generate_surveyjs_json(
     method_results,
@@ -297,6 +311,7 @@ generate_deployment_package <- function(
     admin_sequence,
     item_definitions,
     survey_config,
+    pattern_rules,  # Pass pattern rules if available
     output_dir
   )
   
@@ -309,6 +324,8 @@ generate_deployment_package <- function(
     ordering_result = method_results$ordering_result,
     training_params = method_results$reduction_result$training_params,
     boundary_tables = boundary_tables,
+    pattern_rules = pattern_rules,  # Include pattern rules
+    use_pattern_boundaries = use_pattern_boundaries && reduction_method == "sc_ep",
     admin_sequence = admin_sequence,
     data_config = prepared_data$config,
     optimization_info = if(is_optimized) optimization_results$optimization_analysis else NULL,
@@ -326,7 +343,8 @@ generate_deployment_package <- function(
     item_definitions,
     output_dir,
     is_optimized,
-    optimization_results
+    optimization_results,
+    pattern_rules
   )
   
   cat("\nDeployment package generated successfully!\n")
@@ -336,156 +354,229 @@ generate_deployment_package <- function(
     method_id = selected_method_id,
     is_optimized = is_optimized,
     boundary_tables = boundary_tables,
+    pattern_rules = pattern_rules,
     admin_sequence = admin_sequence,
     surveyjs_json = surveyjs_json,
     implementation_params = implementation_params
   ))
 }
 
-#' #' Generate Stopping Boundary Tables
-#' #'
-#' #' @param method_results Selected method results
-#' #' @param prepared_data Prepared data
-#' #' @param output_dir Output directory
-#' #' @return List of boundary tables
-#' generate_stopping_boundaries <- function(method_results, prepared_data, output_dir) {
-#'   
-#'   # Extract method components
-#'   ordering <- method_results$combination$ordering
-#'   reduction <- method_results$combination$reduction
-#'   
-#'   # Check if this is an optimized method with construct-specific gammas
-#'   is_optimized <- isTRUE(method_results$combination$optimized)
-#'   has_construct_gammas <- !is.null(method_results$combination$construct_gammas)
-#'   
-#'   # Get training parameters
-#'   training_params <- method_results$reduction_result$training_params
-#'   
-#'   # Debug: Check training params structure
-#'   if (is.null(training_params)) {
-#'     warning("No training parameters found in reduction_result")
-#'   }
-#'   
-#'   # Get ordered items (with interleaving applied)
-#'   ordered_items <- method_results$ordering_result$ordered_items
-#'   
-#'   # Check constraints
-#'   constraints <- prepared_data$config$constraints %||% list()
-#'   stop_low_only <- constraints$stop_low_only %||% FALSE
-#'   
-#'   # Initialize results
-#'   boundary_tables <- list()
-#'   
-#'   if (prepared_data$config$questionnaire_type == "unidimensional") {
-#'     # For unidimensional, use global gammas (which may have been optimized)
-#'     gamma_0 <- method_results$combination$gamma_0
-#'     gamma_1 <- method_results$combination$gamma_1
-#'     
-#'     # Generate single boundary table
-#'     boundary_table <- generate_single_boundary_table(
-#'       ordered_items,
-#'       prepared_data$config,
-#'       training_params,
-#'       reduction,
-#'       gamma_0,
-#'       gamma_1,
-#'       stop_low_only
-#'     )
-#'     
-#'     boundary_tables[["total"]] <- boundary_table
-#'     
-#'     # Save as CSV
-#'     write.csv(boundary_table,
-#'               file.path(output_dir, "stopping_boundaries.csv"),
-#'               row.names = FALSE)
-#'     
-#'   } else {
-#'     # Multi-construct case
-#'     for (construct_name in names(prepared_data$config$constructs)) {
-#'       # Get items for this construct in administration order
-#'       construct_items <- prepared_data$config$constructs[[construct_name]]
-#'       construct_ordered <- ordered_items[ordered_items %in% construct_items]
-#'       
-#'       # Get construct-specific training params
-#'       if (is.list(training_params) && !is.null(training_params[[construct_name]])) {
-#'         construct_training_params <- training_params[[construct_name]]
-#'       } else {
-#'         # For methods that don't have construct-specific training params
-#'         construct_training_params <- training_params
-#'       }
-#'       
-#'       # Determine gamma values for this construct
-#'       if (is_optimized && has_construct_gammas && 
-#'           construct_name %in% names(method_results$combination$construct_gammas)) {
-#'         # Use optimized construct-specific gammas
-#'         construct_gamma_0 <- method_results$combination$construct_gammas[[construct_name]]$gamma_0
-#'         construct_gamma_1 <- method_results$combination$construct_gammas[[construct_name]]$gamma_1
-#'       } else {
-#'         # Use global gammas
-#'         construct_gamma_0 <- method_results$combination$gamma_0
-#'         construct_gamma_1 <- method_results$combination$gamma_1
-#'       }
-#'       
-#'       # Generate boundary table
-#'       boundary_table <- generate_single_boundary_table(
-#'         construct_ordered,
-#'         prepared_data$config,
-#'         construct_training_params,
-#'         reduction,
-#'         construct_gamma_0,
-#'         construct_gamma_1,
-#'         stop_low_only,
-#'         construct_name
-#'       )
-#'       
-#'       boundary_tables[[construct_name]] <- boundary_table
-#'     }
-#'     
-#'     # ADD THIS VALIDATION STEP AFTER GENERATING BOUNDARY TABLES:
-#'     cat("  Validating boundary tables...\n")
-#'     validation_results <- validate_boundary_tables(boundary_tables, output_dir)
-#'     
-#'     if (validation_results$has_issues) {
-#'       cat("  ⚠️  WARNING: Boundary validation found issues!\n")
-#'       cat("     See boundary_validation_report.txt for details\n")
-#'       
-#'       # Print critical issues to console
-#'       for (issue in validation_results$issues) {
-#'         cat("     ", issue, "\n")
-#'       }
-#'       
-#'       # Optionally, you could stop deployment if issues are critical
-#'       # stop("Critical boundary issues detected. Please review before deployment.")
-#'       
-#'     } else {
-#'       cat("  ✅ Boundary validation passed\n")
-#'     }
-#'     
-#'     # Save combined CSV
-#'     combined_table <- do.call(rbind, lapply(names(boundary_tables), function(cn) {
-#'       tbl <- boundary_tables[[cn]]
-#'       tbl$construct <- cn
-#'       tbl <- tbl[, c("construct", names(tbl)[names(tbl) != "construct"])]
-#'       return(tbl)
-#'     }))
-#'     
-#'     write.csv(combined_table,
-#'               file.path(output_dir, "stopping_boundaries_all_constructs.csv"),
-#'               row.names = FALSE)
-#'     
-#'     # Save individual construct tables
-#'     for (construct_name in names(boundary_tables)) {
-#'       write.csv(boundary_tables[[construct_name]],
-#'                 file.path(output_dir, paste0("stopping_boundaries_", construct_name, ".csv")),
-#'                 row.names = FALSE)
-#'     }
-#'   }
-#'   
-#'   # Also save as HTML for better viewing
-#'   generate_boundary_tables_html(boundary_tables, prepared_data, output_dir)
-#'   
-#'   return(boundary_tables)
-#' }
+#' Generate Pattern-Specific Rules for SC-EP (NEW FUNCTION)
+#'
+#' @param method_results Method results
+#' @param prepared_data Prepared data
+#' @param output_dir Output directory
+#' @return List of pattern rules by construct
+generate_pattern_rules <- function(method_results, prepared_data, output_dir) {
+  
+  # Extract method components
+  is_optimized <- isTRUE(method_results$combination$optimized)
+  has_construct_gammas <- !is.null(method_results$combination$construct_gammas)
+  
+  # Get training parameters
+  training_params <- method_results$reduction_result$training_params
+  
+  # Get ordered items
+  ordered_items <- method_results$ordering_result$ordered_items
+  
+  # Initialize pattern rules storage
+  all_pattern_rules <- list()
+  
+  if (prepared_data$config$questionnaire_type == "unidimensional") {
+    # Unidimensional case
+    gamma_0 <- method_results$combination$gamma_0
+    gamma_1 <- method_results$combination$gamma_1
+    
+    pattern_rules <- generate_pattern_boundary_table(
+      ordered_items = ordered_items,
+      training_params = training_params,
+      gamma_0 = gamma_0,
+      gamma_1 = gamma_1,
+      construct_name = "total"
+    )
+    
+    all_pattern_rules[["total"]] <- pattern_rules
+    
+  } else {
+    # Multi-construct case
+    for (construct_name in names(prepared_data$config$constructs)) {
+      # Get items for this construct
+      construct_items <- prepared_data$config$constructs[[construct_name]]
+      construct_ordered <- ordered_items[ordered_items %in% construct_items]
+      
+      # Get construct-specific parameters
+      if (is.list(training_params) && !is.null(training_params[[construct_name]])) {
+        construct_training_params <- training_params[[construct_name]]
+      } else {
+        construct_training_params <- training_params
+      }
+      
+      # Get gamma values
+      if (is_optimized && has_construct_gammas && 
+          construct_name %in% names(method_results$combination$construct_gammas)) {
+        construct_gamma_0 <- method_results$combination$construct_gammas[[construct_name]]$gamma_0
+        construct_gamma_1 <- method_results$combination$construct_gammas[[construct_name]]$gamma_1
+      } else {
+        construct_gamma_0 <- method_results$combination$gamma_0
+        construct_gamma_1 <- method_results$combination$gamma_1
+      }
+      
+      # Generate pattern rules for this construct
+      pattern_rules <- generate_pattern_boundary_table(
+        ordered_items = construct_ordered,
+        training_params = construct_training_params,
+        gamma_0 = construct_gamma_0,
+        gamma_1 = construct_gamma_1,
+        construct_name = construct_name
+      )
+      
+      all_pattern_rules[[construct_name]] <- pattern_rules
+    }
+  }
+  
+  # Save pattern rules
+  saveRDS(all_pattern_rules, file.path(output_dir, "pattern_rules.rds"))
+  
+  # Also save as JSON for external use
+  if (requireNamespace("jsonlite", quietly = TRUE)) {
+    pattern_json <- jsonlite::toJSON(all_pattern_rules, pretty = TRUE, auto_unbox = TRUE)
+    writeLines(pattern_json, file.path(output_dir, "pattern_rules.json"))
+  }
+  
+  # Generate human-readable pattern rules summary
+  generate_pattern_rules_summary(all_pattern_rules, output_dir)
+  
+  return(all_pattern_rules)
+}
+
+#' Generate Pattern-Specific Boundary Table (NEW FUNCTION)
+#'
+#' @param ordered_items Ordered items
+#' @param training_params Training parameters with lookup tables
+#' @param gamma_0 Low-risk threshold
+#' @param gamma_1 High-risk threshold
+#' @param construct_name Name of construct
+#' @return List with pattern rules for each position
+generate_pattern_boundary_table <- function(ordered_items, training_params, 
+                                            gamma_0, gamma_1, 
+                                            construct_name = NULL) {
+  
+  n_items <- length(ordered_items)
+  
+  # Get lookup tables
+  lookup_tables <- training_params$lookup_tables
+  
+  if (is.null(lookup_tables)) {
+    warning(paste("No lookup tables found for SC-EP method",
+                  if(!is.null(construct_name)) paste("for construct", construct_name)))
+    return(NULL)
+  }
+  
+  # Create pattern rules for each position
+  pattern_rules <- list()
+  
+  for (k in 1:n_items) {
+    if (k <= length(lookup_tables) && !is.null(lookup_tables[[k]])) {
+      
+      low_risk_patterns <- list()
+      high_risk_patterns <- list()
+      neutral_patterns <- list()
+      
+      # Check each pattern at this position
+      for (pattern_str in names(lookup_tables[[k]])) {
+        probs <- lookup_tables[[k]][[pattern_str]]
+        
+        # Parse pattern
+        scores <- as.numeric(strsplit(pattern_str, "_")[[1]])
+        
+        pattern_info <- list(
+          pattern = pattern_str,
+          scores = scores,
+          sum_score = sum(scores),
+          prob_low = probs["prob_low"],
+          prob_high = probs["prob_high"]
+        )
+        
+        # Classify pattern
+        if (!is.na(probs["prob_low"]) && probs["prob_low"] >= gamma_0) {
+          low_risk_patterns[[pattern_str]] <- pattern_info
+        } else if (!is.na(probs["prob_high"]) && probs["prob_high"] >= gamma_1) {
+          high_risk_patterns[[pattern_str]] <- pattern_info
+        } else {
+          neutral_patterns[[pattern_str]] <- pattern_info
+        }
+      }
+      
+      pattern_rules[[k]] <- list(
+        position = k,
+        items_included = ordered_items[1:k],
+        low_risk_patterns = low_risk_patterns,
+        high_risk_patterns = high_risk_patterns,
+        neutral_patterns = neutral_patterns,
+        total_patterns = length(lookup_tables[[k]]),
+        construct = construct_name
+      )
+    }
+  }
+  
+  return(pattern_rules)
+}
+
+#' Generate Pattern Rules Summary (NEW FUNCTION)
+#'
+#' @param all_pattern_rules All pattern rules
+#' @param output_dir Output directory
+generate_pattern_rules_summary <- function(all_pattern_rules, output_dir) {
+  
+  summary_file <- file.path(output_dir, "pattern_rules_summary.txt")
+  
+  summary_text <- paste0(
+    "PATTERN-SPECIFIC STOPPING RULES SUMMARY\n",
+    "=======================================\n\n",
+    "Generated: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n\n"
+  )
+  
+  for (construct_name in names(all_pattern_rules)) {
+    rules <- all_pattern_rules[[construct_name]]
+    
+    if (!is.null(rules)) {
+      summary_text <- paste0(summary_text,
+                             "Construct: ", construct_name, "\n",
+                             "-------------------\n")
+      
+      for (k in seq_along(rules)) {
+        if (!is.null(rules[[k]])) {
+          pos_rules <- rules[[k]]
+          n_low <- length(pos_rules$low_risk_patterns)
+          n_high <- length(pos_rules$high_risk_patterns)
+          n_neutral <- length(pos_rules$neutral_patterns)
+          
+          summary_text <- paste0(summary_text,
+                                 "Position ", k, " (", 
+                                 paste(pos_rules$items_included, collapse=", "), "):\n",
+                                 "  Low-risk patterns: ", n_low, "\n",
+                                 "  High-risk patterns: ", n_high, "\n",
+                                 "  Neutral patterns: ", n_neutral, "\n")
+          
+          # Show example patterns
+          if (n_low > 0) {
+            example_low <- names(pos_rules$low_risk_patterns)[1]
+            summary_text <- paste0(summary_text,
+                                   "    Example low-risk: ", example_low, "\n")
+          }
+          if (n_high > 0) {
+            example_high <- names(pos_rules$high_risk_patterns)[1]
+            summary_text <- paste0(summary_text,
+                                   "    Example high-risk: ", example_high, "\n")
+          }
+        }
+      }
+      summary_text <- paste0(summary_text, "\n")
+    }
+  }
+  
+  writeLines(summary_text, summary_file)
+}
 
 #' Enhanced Generate Stopping Boundaries (WITH INTEGRATED VALIDATION)
 #'
@@ -639,113 +730,6 @@ generate_stopping_boundaries <- function(method_results, prepared_data, output_d
   return(boundary_tables)
 }
 
-#' #' Generate Single Boundary Table
-#' #'
-#' #' @param ordered_items Ordered items for this construct/total
-#' #' @param config Data configuration
-#' #' @param training_params Training parameters
-#' #' @param reduction Reduction method
-#' #' @param gamma_0 Low-risk threshold
-#' #' @param gamma_1 High-risk threshold
-#' #' @param stop_low_only Whether only low-risk stopping is allowed
-#' #' @param construct_name Name of construct (NULL for unidimensional)
-#' #' @return Data frame with boundary information
-#' generate_single_boundary_table <- function(ordered_items, config, training_params,
-#'                                            reduction, gamma_0, gamma_1, stop_low_only,
-#'                                            construct_name = NULL) {
-#'   
-#'   n_items <- length(ordered_items)
-#'   
-#'   # Get cutoff
-#'   if (!is.null(construct_name)) {
-#'     cutoff <- config$cutoffs[[construct_name]]
-#'   } else {
-#'     cutoff <- config$cutoffs[["total"]] %||% config$cutoffs[[1]]
-#'   }
-#'   
-#'   # Initialize boundary table
-#'   boundary_df <- data.frame(
-#'     items_administered = 1:n_items,
-#'     items_included = NA_character_,
-#'     low_risk_boundary = NA_character_,
-#'     high_risk_boundary = NA_character_,
-#'     stringsAsFactors = FALSE
-#'   )
-#'   
-#'   # Check if gamma values are valid (not strings like "construct_specific")
-#'   gamma_0_valid <- is.numeric(gamma_0)
-#'   gamma_1_valid <- is.numeric(gamma_1)
-#'   
-#'   # Calculate boundaries based on reduction method
-#'   if (reduction == "none") {
-#'     # No reduction - all items must be administered
-#'     boundary_df$low_risk_boundary <- "N/A"
-#'     boundary_df$high_risk_boundary <- "N/A"
-#'     boundary_df$low_risk_boundary[n_items] <- paste0("Xk < ", cutoff)
-#'     boundary_df$high_risk_boundary[n_items] <- paste0("Xk >= ", cutoff)
-#'     
-#'   } else if (reduction == "dc") {
-#'     # Deterministic curtailment
-#'     boundaries <- calculate_dc_boundaries(ordered_items, training_params, cutoff)
-#'     
-#'     for (k in 1:n_items) {
-#'       boundary_df$items_included[k] <- paste(ordered_items[1:k], collapse = ", ")
-#'       
-#'       if (!is.na(boundaries$low_boundary[k])) {
-#'         boundary_df$low_risk_boundary[k] <- paste0("Xk <= ", boundaries$low_boundary[k])
-#'       }
-#'       
-#'       if (!is.na(boundaries$high_boundary[k]) && !stop_low_only) {
-#'         boundary_df$high_risk_boundary[k] <- paste0("Xk >= ", boundaries$high_boundary[k])
-#'       }
-#'     }
-#'     
-#'   } else if (reduction %in% c("sc_ep", "sc_sor", "sc_mor") && gamma_0_valid && gamma_1_valid) {
-#'     # Stochastic curtailment - only if gamma values are numeric
-#'     boundaries <- calculate_sc_boundaries(
-#'       ordered_items, training_params, reduction,
-#'       gamma_0, gamma_1, cutoff
-#'     )
-#'     
-#'     for (k in 1:n_items) {
-#'       boundary_df$items_included[k] <- paste(ordered_items[1:k], collapse = ", ")
-#'       
-#'       if (!is.na(boundaries$low_boundary[k])) {
-#'         boundary_df$low_risk_boundary[k] <- paste0("Xk <= ", boundaries$low_boundary[k])
-#'       }
-#'       
-#'       if (!is.na(boundaries$high_boundary[k]) && !stop_low_only && gamma_1 < 1.0) {
-#'         boundary_df$high_risk_boundary[k] <- paste0("Xk >= ", boundaries$high_boundary[k])
-#'       }
-#'     }
-#'     
-#'   } else if (reduction == "irt_cct") {
-#'     # IRT-based CCT - convert theta to sum scores
-#'     boundary_df$low_risk_boundary <- "Based on theta estimate"
-#'     boundary_df$high_risk_boundary <- ifelse(stop_low_only, "N/A", "Based on theta estimate")
-#'     boundary_df$items_included <- sapply(1:n_items, function(k) {
-#'       paste(ordered_items[1:k], collapse = ", ")
-#'     })
-#'   } else {
-#'     # Invalid gamma values or unknown reduction method
-#'     boundary_df$low_risk_boundary <- "N/A"
-#'     boundary_df$high_risk_boundary <- "N/A"
-#'   }
-#'   
-#'   # Clean up items_included column if still NA
-#'   if (all(is.na(boundary_df$items_included))) {
-#'     boundary_df$items_included <- sapply(1:n_items, function(k) {
-#'       paste(ordered_items[1:k], collapse = ", ")
-#'     })
-#'   }
-#'   
-#'   # Replace remaining NAs with "N/A"
-#'   boundary_df$low_risk_boundary[is.na(boundary_df$low_risk_boundary)] <- "N/A"
-#'   boundary_df$high_risk_boundary[is.na(boundary_df$high_risk_boundary)] <- "N/A"
-#'   
-#'   return(boundary_df)
-#' }
-
 #' Generate Single Boundary Table (COMPLETE UPDATED VERSION)
 #'
 #' @param ordered_items Ordered items for this construct/total
@@ -833,7 +817,7 @@ generate_single_boundary_table <- function(ordered_items, config, training_param
       # Method-specific notes
       if (reduction == "sc_ep") {
         boundary_df$method_notes[k] <- paste0("SC-EP boundaries (γ₀=", gamma_0, ", γ₁=", gamma_1, 
-                                              ") - conflicts resolved")
+                                              ") - sum score aggregated")
       } else if (reduction == "sc_sor") {
         boundary_df$method_notes[k] <- paste0("SC-SOR regression-based (γ₀=", gamma_0, ", γ₁=", gamma_1, ")")
       } else if (reduction == "sc_mor") {
@@ -870,53 +854,6 @@ generate_single_boundary_table <- function(ordered_items, config, training_param
   
   return(boundary_df)
 }
-
-#' #' Calculate Deterministic Curtailment Boundaries
-#' #'
-#' #' @param ordered_items Ordered items
-#' #' @param training_params Training parameters
-#' #' @param cutoff Classification cutoff
-#' #' @return List with low and high boundaries
-#' calculate_dc_boundaries <- function(ordered_items, training_params, cutoff) {
-#'   
-#'   n_items <- length(ordered_items)
-#'   low_boundary <- rep(NA, n_items)
-#'   high_boundary <- rep(NA, n_items)
-#'   
-#'   # Get item ranges
-#'   item_ranges <- training_params$item_ranges
-#'   
-#'   for (k in 1:n_items) {
-#'     if (k < n_items) {
-#'       # Calculate min/max possible scores
-#'       remaining_items <- ordered_items[(k+1):n_items]
-#'       
-#'       # For low risk boundary: max possible must be < cutoff
-#'       # So current sum must be < cutoff - min_remaining
-#'       min_remaining <- sum(sapply(remaining_items, function(x) {
-#'         if (!is.null(item_ranges[[x]])) item_ranges[[x]][1] else 0
-#'       }))
-#'       low_boundary[k] <- cutoff - min_remaining - 1
-#'       
-#'       # For high risk boundary: min possible must be >= cutoff
-#'       # So current sum must be >= cutoff - max_remaining
-#'       max_remaining <- sum(sapply(remaining_items, function(x) {
-#'         if (!is.null(item_ranges[[x]])) item_ranges[[x]][2] else 3
-#'       }))
-#'       high_boundary[k] <- cutoff - max_remaining
-#'       
-#'       # Validate boundaries
-#'       if (low_boundary[k] < 0) low_boundary[k] <- NA
-#'       if (high_boundary[k] > k * 3) high_boundary[k] <- NA  # Assuming max item score is 3
-#'     } else {
-#'       # Last item - simple cutoff
-#'       low_boundary[k] <- cutoff - 1
-#'       high_boundary[k] <- cutoff
-#'     }
-#'   }
-#'   
-#'   return(list(low_boundary = low_boundary, high_boundary = high_boundary))
-#' }
 
 #' Calculate Deterministic Curtailment Boundaries (CORRECTED VERSION)
 #'
@@ -983,292 +920,7 @@ calculate_dc_boundaries <- function(ordered_items, training_params, cutoff) {
   return(list(low_boundary = low_boundary, high_boundary = high_boundary))
 }
 
-#' #' Calculate Stochastic Curtailment Boundaries
-#' #'
-#' #' @param ordered_items Ordered items
-#' #' @param training_params Training parameters
-#' #' @param method SC method type
-#' #' @param gamma_0 Low-risk threshold
-#' #' @param gamma_1 High-risk threshold
-#' #' @param cutoff Classification cutoff
-#' #' @return List with low and high boundaries
-#' calculate_sc_boundaries <- function(ordered_items, training_params, method,
-#'                                     gamma_0, gamma_1, cutoff) {
-#'   
-#'   n_items <- length(ordered_items)
-#'   low_boundary <- rep(NA, n_items)
-#'   high_boundary <- rep(NA, n_items)
-#'   
-#'   # Check if training_params is NULL
-#'   if (is.null(training_params)) {
-#'     warning("Training parameters are NULL - cannot calculate boundaries")
-#'     return(list(low_boundary = low_boundary, high_boundary = high_boundary))
-#'   }
-#'   
-#'   # Check if models exist and are valid (for sc_sor and sc_mor)
-#'   if (method %in% c("sc_sor", "sc_mor")) {
-#'     if (!is.null(training_params$model_result)) {
-#'       if (!is.null(training_params$model_result$success) &&
-#'           !training_params$model_result$success) {
-#'         # Return all NAs if models failed
-#'         return(list(low_boundary = low_boundary, high_boundary = high_boundary))
-#'       }
-#'     }
-#'   }
-#'   
-#'   if (method == "sc_ep") {
-#'     # Use empirical lookup tables
-#'     lookup_tables <- training_params$lookup_tables
-#'     
-#'     if (is.null(lookup_tables)) {
-#'       warning("No lookup tables found in training parameters for sc_ep method")
-#'       return(list(low_boundary = low_boundary, high_boundary = high_boundary))
-#'     }
-#'     
-#'     if (!is.null(lookup_tables)) {
-#'       for (k in 1:n_items) {
-#'         if (k <= length(lookup_tables) && !is.null(lookup_tables[[k]])) {
-#'           # Find all patterns that meet probability thresholds
-#'           patterns <- names(lookup_tables[[k]])
-#'           
-#'           for (pattern in patterns) {
-#'             probs <- lookup_tables[[k]][[pattern]]
-#'             scores <- as.numeric(strsplit(pattern, "_")[[1]])
-#'             sum_score <- sum(scores)
-#'             
-#'             # Check low risk boundary
-#'             if (probs["prob_low"] >= gamma_0) {
-#'               if (is.na(low_boundary[k]) || sum_score > low_boundary[k]) {
-#'                 low_boundary[k] <- sum_score
-#'               }
-#'             }
-#'             
-#'             # Check high risk boundary
-#'             if (probs["prob_high"] >= gamma_1) {
-#'               if (is.na(high_boundary[k]) || sum_score < high_boundary[k]) {
-#'                 high_boundary[k] <- sum_score
-#'               }
-#'             }
-#'           }
-#'         }
-#'       }
-#'     }
-#'     
-#'   } else if (method %in% c("sc_sor", "sc_mor")) {
-#'     # Use regression models to find boundaries
-#'     if (!is.null(training_params$model_result)) {
-#'       models <- training_params$model_result$models
-#'     } else {
-#'       models <- training_params$models
-#'     }
-#'     
-#'     if (is.null(models)) {
-#'       warning("No models found in training parameters for ", method, " method")
-#'       return(list(low_boundary = low_boundary, high_boundary = high_boundary))
-#'     }
-#'     
-#'     if (!is.null(models)) {
-#'       for (k in 1:n_items) {
-#'         if (k <= length(models) && !is.null(models[[k]])) {
-#'           # For sc_sor, search for sum score boundaries
-#'           if (method == "sc_sor") {
-#'             # Search for boundary where P(low) >= gamma_0
-#'             for (sum_score in 0:(k*4)) {  # Assuming max item score is 4
-#'               tryCatch({
-#'                 pred_prob <- predict(models[[k]],
-#'                                      newdata = data.frame(sum_score = sum_score),
-#'                                      type = "response")
-#'                 prob_low <- 1 - pred_prob
-#'                 
-#'                 if (prob_low >= gamma_0) {
-#'                   low_boundary[k] <- sum_score
-#'                 }
-#'                 
-#'                 if (pred_prob >= gamma_1 && (is.na(high_boundary[k]) || sum_score < high_boundary[k])) {
-#'                   high_boundary[k] <- sum_score
-#'                 }
-#'               }, error = function(e) {
-#'                 # Skip this sum score if prediction fails
-#'               })
-#'             }
-#'           }
-#'           # For sc_mor, boundaries depend on specific item responses (more complex)
-#'           # Simplified: show as pattern-dependent
-#'           else if (method == "sc_mor") {
-#'             # Could implement more sophisticated boundary calculation here
-#'             # For now, indicate that boundaries are pattern-dependent
-#'             low_boundary[k] <- NA  # Pattern-dependent
-#'             high_boundary[k] <- NA  # Pattern-dependent
-#'           }
-#'         }
-#'       }
-#'     }
-#'   }
-#'   
-#'   return(list(low_boundary = low_boundary, high_boundary = high_boundary))
-#' }
-
-#' #' Calculate Stochastic Curtailment Boundaries
-#' #'
-#' #' @param ordered_items Ordered items
-#' #' @param training_params Training parameters
-#' #' @param method SC method type
-#' #' @param gamma_0 Low-risk threshold
-#' #' @param gamma_1 High-risk threshold
-#' #' @param cutoff Classification cutoff
-#' #' @return List with low and high boundaries
-#' calculate_sc_boundaries <- function(ordered_items, training_params, method,
-#'                                     gamma_0, gamma_1, cutoff) {
-#'   
-#'   n_items <- length(ordered_items)
-#'   low_boundary <- rep(NA, n_items)
-#'   high_boundary <- rep(NA, n_items)
-#'   
-#'   # Validation checks
-#'   if (is.null(training_params)) {
-#'     warning("Training parameters are NULL - cannot calculate SC boundaries")
-#'     return(list(low_boundary = low_boundary, high_boundary = high_boundary))
-#'   }
-#'   
-#'   # Check for model failures in regression-based methods
-#'   if (method %in% c("sc_sor", "sc_mor")) {
-#'     if (!is.null(training_params$model_result)) {
-#'       if (!is.null(training_params$model_result$success) &&
-#'           !training_params$model_result$success) {
-#'         warning("Models failed during training - cannot calculate boundaries")
-#'         return(list(low_boundary = low_boundary, high_boundary = high_boundary))
-#'       }
-#'     }
-#'   }
-#'   
-#'   if (method == "sc_ep") {
-#'     # Use empirical lookup tables
-#'     lookup_tables <- training_params$lookup_tables
-#'     
-#'     if (is.null(lookup_tables)) {
-#'       warning("No lookup tables found for sc_ep method")
-#'       return(list(low_boundary = low_boundary, high_boundary = high_boundary))
-#'     }
-#'     
-#'     for (k in 1:n_items) {
-#'       if (k <= length(lookup_tables) && !is.null(lookup_tables[[k]])) {
-#'         patterns <- names(lookup_tables[[k]])
-#'         
-#'         # Find boundaries by examining all patterns
-#'         low_candidates <- c()
-#'         high_candidates <- c()
-#'         
-#'         for (pattern in patterns) {
-#'           probs <- lookup_tables[[k]][[pattern]]
-#'           scores <- as.numeric(strsplit(pattern, "_")[[1]])
-#'           sum_score <- sum(scores)
-#'           
-#'           # Collect candidates that meet thresholds
-#'           if (!is.na(probs["prob_low"]) && probs["prob_low"] >= gamma_0) {
-#'             low_candidates <- c(low_candidates, sum_score)
-#'           }
-#'           
-#'           if (!is.na(probs["prob_high"]) && probs["prob_high"] >= gamma_1) {
-#'             high_candidates <- c(high_candidates, sum_score)
-#'           }
-#'         }
-#'         
-#'         # Set boundaries (highest for low-risk, lowest for high-risk)
-#'         if (length(low_candidates) > 0) {
-#'           low_boundary[k] <- max(low_candidates)
-#'         }
-#'         if (length(high_candidates) > 0) {
-#'           high_boundary[k] <- min(high_candidates)
-#'         }
-#'         
-#'         # VALIDATION: Check for overlap
-#'         if (!is.na(low_boundary[k]) && !is.na(high_boundary[k])) {
-#'           if (low_boundary[k] >= high_boundary[k]) {
-#'             warning(paste("SC boundaries overlap at position", k,
-#'                           "for method", method, 
-#'                           ": low <=", low_boundary[k], 
-#'                           ", high >=", high_boundary[k]))
-#'           }
-#'         }
-#'       }
-#'     }
-#'     
-#'   } else if (method %in% c("sc_sor", "sc_mor")) {
-#'     # Use regression models
-#'     if (!is.null(training_params$model_result)) {
-#'       models <- training_params$model_result$models
-#'     } else {
-#'       models <- training_params$models
-#'     }
-#'     
-#'     if (is.null(models)) {
-#'       warning("No models found for", method, "method")
-#'       return(list(low_boundary = low_boundary, high_boundary = high_boundary))
-#'     }
-#'     
-#'     for (k in 1:n_items) {
-#'       if (k <= length(models) && !is.null(models[[k]])) {
-#'         
-#'         if (method == "sc_sor") {
-#'           # Search over possible sum scores
-#'           low_candidates <- c()
-#'           high_candidates <- c()
-#'           
-#'           max_possible_score <- k * 4  # Assuming max item score is 4
-#'           
-#'           for (sum_score in 0:max_possible_score) {
-#'             tryCatch({
-#'               pred_prob <- predict(models[[k]],
-#'                                    newdata = data.frame(sum_score = sum_score),
-#'                                    type = "response")
-#'               
-#'               prob_high <- as.numeric(pred_prob)
-#'               prob_low <- 1 - prob_high
-#'               
-#'               if (!is.na(prob_low) && prob_low >= gamma_0) {
-#'                 low_candidates <- c(low_candidates, sum_score)
-#'               }
-#'               
-#'               if (!is.na(prob_high) && prob_high >= gamma_1) {
-#'                 high_candidates <- c(high_candidates, sum_score)
-#'               }
-#'               
-#'             }, error = function(e) {
-#'               # Skip problematic predictions
-#'             })
-#'           }
-#'           
-#'           # Set boundaries
-#'           if (length(low_candidates) > 0) {
-#'             low_boundary[k] <- max(low_candidates)
-#'           }
-#'           if (length(high_candidates) > 0) {
-#'             high_boundary[k] <- min(high_candidates)
-#'           }
-#'           
-#'         } else if (method == "sc_mor") {
-#'           # For multiple ordinal regression, boundaries are pattern-dependent
-#'           # Set to NA to indicate this complexity
-#'           low_boundary[k] <- NA
-#'           high_boundary[k] <- NA
-#'         }
-#'         
-#'         # VALIDATION: Check for overlap (only for sc_sor where we compute boundaries)
-#'         if (method == "sc_sor" && !is.na(low_boundary[k]) && !is.na(high_boundary[k])) {
-#'           if (low_boundary[k] >= high_boundary[k]) {
-#'             warning(paste("SC-SOR boundaries overlap at position", k,
-#'                           ": low <=", low_boundary[k], 
-#'                           ", high >=", high_boundary[k]))
-#'           }
-#'         }
-#'       }
-#'     }
-#'   }
-#'   
-#'   return(list(low_boundary = low_boundary, high_boundary = high_boundary))
-#' }
-
-#' Calculate Stochastic Curtailment Boundaries (COMPLETE FIX WITH CONFLICT RESOLUTION)
+#' Calculate Stochastic Curtailment Boundaries (SUM-SCORE VERSION - KEPT FOR COMPATIBILITY)
 #'
 #' @param ordered_items Ordered items
 #' @param training_params Training parameters
@@ -1353,10 +1005,6 @@ calculate_sc_boundaries <- function(ordered_items, training_params, method,
           # This ensures we only stop when even the least confident pattern supports the decision
           min_prob_low <- min(group$prob_lows, na.rm = TRUE)
           min_prob_high <- min(group$prob_highs, na.rm = TRUE)
-          
-          # Alternative MODERATE RULE: Use median probability  
-          # median_prob_low <- median(group$prob_lows, na.rm = TRUE)
-          # median_prob_high <- median(group$prob_highs, na.rm = TRUE)
           
           # Check if this sum score qualifies for stopping
           if (!is.na(min_prob_low) && min_prob_low >= gamma_0) {
@@ -1479,7 +1127,7 @@ calculate_sc_boundaries <- function(ordered_items, training_params, method,
       if (k <= length(models) && !is.null(models[[k]])) {
         
         # Search for boundary where P(low) >= gamma_0 and P(high) >= gamma_1
-        max_possible_score <- k * 3  # Assuming max item score is 4
+        max_possible_score <- k * 3  # Assuming max item score is 3
         
         low_candidates <- c()
         high_candidates <- c()
@@ -1545,71 +1193,6 @@ calculate_sc_boundaries <- function(ordered_items, training_params, method,
   
   return(list(low_boundary = low_boundary, high_boundary = high_boundary))
 }
-
-#' #' Validate Boundary Tables After Generation
-#' validate_boundary_tables <- function(boundary_tables, output_dir) {
-#'   
-#'   validation_report <- c()
-#'   has_issues <- FALSE
-#'   
-#'   for (construct_name in names(boundary_tables)) {
-#'     boundary_table <- boundary_tables[[construct_name]]
-#'     
-#'     for (k in 1:nrow(boundary_table)) {
-#'       low_boundary_text <- boundary_table$low_risk_boundary[k]
-#'       high_boundary_text <- boundary_table$high_risk_boundary[k]
-#'       
-#'       # Skip if either is N/A
-#'       if (low_boundary_text == "N/A" || high_boundary_text == "N/A") next
-#'       
-#'       # Extract numeric values
-#'       low_val <- NA
-#'       high_val <- NA
-#'       
-#'       if (grepl("Xk <= ", low_boundary_text)) {
-#'         low_val <- as.numeric(gsub("Xk <= ", "", low_boundary_text))
-#'       }
-#'       if (grepl("Xk >= ", high_boundary_text)) {
-#'         high_val <- as.numeric(gsub("Xk >= ", "", high_boundary_text))
-#'       }
-#'       
-#'       # Check for issues
-#'       if (!is.na(low_val) && !is.na(high_val)) {
-#'         if (low_val == high_val) {
-#'           issue_msg <- paste("ISSUE:", construct_name, "position", k, 
-#'                              "- Same boundary:", low_val)
-#'           validation_report <- c(validation_report, issue_msg)
-#'           has_issues <- TRUE
-#'         }
-#'         
-#'         if (low_val > high_val) {
-#'           issue_msg <- paste("ISSUE:", construct_name, "position", k, 
-#'                              "- Inverted boundaries: low <=", low_val, 
-#'                              "> high >=", high_val)
-#'           validation_report <- c(validation_report, issue_msg)
-#'           has_issues <- TRUE
-#'         }
-#'       }
-#'     }
-#'   }
-#'   
-#'   # Write validation report
-#'   if (length(validation_report) > 0) {
-#'     report_text <- c(
-#'       "BOUNDARY VALIDATION REPORT",
-#'       "=========================",
-#'       paste("Generated:", Sys.time()),
-#'       "",
-#'       validation_report
-#'     )
-#'     writeLines(report_text, file.path(output_dir, "boundary_validation_report.txt"))
-#'   }
-#'   
-#'   return(list(
-#'     has_issues = has_issues,
-#'     issues = validation_report
-#'   ))
-#' }
 
 #' Validate Boundary Tables After Generation (ENHANCED VERSION)
 #'
@@ -1790,7 +1373,91 @@ generate_administration_sequence <- function(method_results, prepared_data, item
   return(admin_seq)
 }
 
-#' Generate SurveyJS JSON Configuration
+#' Generate Pattern-Based Visibility Condition (NEW FUNCTION)
+#'
+#' @param prev_items Previous items administered
+#' @param pattern_rules Pattern rules for current position
+#' @param stop_low_only Whether only low-risk stopping is allowed
+#' @return SurveyJS visibility condition string
+generate_pattern_visibility_condition <- function(prev_items, pattern_rules, 
+                                                  stop_low_only = FALSE) {
+  
+  if (is.null(pattern_rules)) {
+    return(NULL)  # No pattern rules for this position
+  }
+  
+  # Get pattern info
+  low_patterns <- pattern_rules$low_risk_patterns
+  high_patterns <- pattern_rules$high_risk_patterns
+  
+  if (length(low_patterns) == 0 && length(high_patterns) == 0) {
+    return(NULL)  # No stopping patterns at this position
+  }
+  
+  # Build conditions for continuing (NOT stopping)
+  continue_conditions <- character()
+  
+  # Low-risk patterns - continue if NOT matching any low-risk pattern
+  if (length(low_patterns) > 0) {
+    low_conditions <- character()
+    
+    for (pattern_name in names(low_patterns)) {
+      pattern_info <- low_patterns[[pattern_name]]
+      scores <- pattern_info$scores
+      
+      # Create condition for this specific pattern
+      pattern_checks <- character()
+      for (i in seq_along(scores)) {
+        pattern_checks <- c(pattern_checks, 
+                            paste0("{", prev_items[i], "} == ", scores[i]))
+      }
+      
+      # This pattern would trigger LOW risk stop
+      pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
+      low_conditions <- c(low_conditions, pattern_condition)
+    }
+    
+    # Continue if NOT matching any low-risk pattern
+    if (length(low_conditions) > 0) {
+      not_low_risk <- paste0("!(", paste(low_conditions, collapse = " or "), ")")
+      continue_conditions <- c(continue_conditions, not_low_risk)
+    }
+  }
+  
+  # High-risk patterns - continue if NOT matching any high-risk pattern
+  if (!stop_low_only && length(high_patterns) > 0) {
+    high_conditions <- character()
+    
+    for (pattern_name in names(high_patterns)) {
+      pattern_info <- high_patterns[[pattern_name]]
+      scores <- pattern_info$scores
+      
+      pattern_checks <- character()
+      for (i in seq_along(scores)) {
+        pattern_checks <- c(pattern_checks, 
+                            paste0("{", prev_items[i], "} == ", scores[i]))
+      }
+      
+      pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
+      high_conditions <- c(high_conditions, pattern_condition)
+    }
+    
+    # Continue if NOT matching any high-risk pattern  
+    if (length(high_conditions) > 0) {
+      not_high_risk <- paste0("!(", paste(high_conditions, collapse = " or "), ")")
+      continue_conditions <- c(continue_conditions, not_high_risk)
+    }
+  }
+  
+  # Combine all continue conditions
+  if (length(continue_conditions) > 0) {
+    return(paste(continue_conditions, collapse = " and "))
+  }
+  
+  return(NULL)
+}
+
+#' Generate SurveyJS JSON Configuration (ENHANCED WITH PATTERN SUPPORT)
 #'
 #' @param method_results Method results
 #' @param prepared_data Prepared data
@@ -1798,11 +1465,12 @@ generate_administration_sequence <- function(method_results, prepared_data, item
 #' @param admin_sequence Administration sequence
 #' @param item_definitions List of item definitions
 #' @param survey_config Survey configuration
+#' @param pattern_rules Pattern-specific rules (if applicable)
 #' @param output_dir Output directory
 #' @return List containing SurveyJS configuration
 generate_surveyjs_json <- function(method_results, prepared_data, boundary_tables,
                                    admin_sequence, item_definitions, survey_config,
-                                   output_dir) {
+                                   pattern_rules = NULL, output_dir) {
   
   # Initialize survey structure
   survey <- list(
@@ -1814,30 +1482,55 @@ generate_surveyjs_json <- function(method_results, prepared_data, boundary_table
   # Get method details
   reduction_method <- method_results$combination$reduction
   stop_low_only <- prepared_data$config$constraints$stop_low_only %||% FALSE
+  use_patterns <- !is.null(pattern_rules) && reduction_method == "sc_ep"
   
   # Process based on questionnaire type
   if (prepared_data$config$questionnaire_type == "unidimensional") {
     # Single construct - simpler logic
-    survey$pages <- generate_unidimensional_pages(
-      admin_sequence,
-      boundary_tables[["total"]],
-      item_definitions,
-      survey_config,
-      reduction_method,
-      stop_low_only
-    )
+    if (use_patterns) {
+      survey$pages <- generate_unidimensional_pages_patterns(
+        admin_sequence,
+        pattern_rules[["total"]],
+        item_definitions,
+        survey_config,
+        reduction_method,
+        stop_low_only
+      )
+    } else {
+      survey$pages <- generate_unidimensional_pages(
+        admin_sequence,
+        boundary_tables[["total"]],
+        item_definitions,
+        survey_config,
+        reduction_method,
+        stop_low_only
+      )
+    }
   } else {
     # Multi-construct - complex continuation logic
-    survey$pages <- generate_multi_construct_pages(
-      admin_sequence,
-      boundary_tables,
-      item_definitions,
-      survey_config,
-      prepared_data$config,
-      method_results,
-      reduction_method,
-      stop_low_only
-    )
+    if (use_patterns) {
+      survey$pages <- generate_multi_construct_pages_patterns(
+        admin_sequence,
+        pattern_rules,
+        item_definitions,
+        survey_config,
+        prepared_data$config,
+        method_results,
+        reduction_method,
+        stop_low_only
+      )
+    } else {
+      survey$pages <- generate_multi_construct_pages(
+        admin_sequence,
+        boundary_tables,
+        item_definitions,
+        survey_config,
+        prepared_data$config,
+        method_results,
+        reduction_method,
+        stop_low_only
+      )
+    }
   }
   
   # Add completion page
@@ -1879,7 +1572,198 @@ generate_surveyjs_json <- function(method_results, prepared_data, boundary_table
   return(survey)
 }
 
-#' Generate Pages for Unidimensional Questionnaire
+#' Generate Pages for Unidimensional with Pattern Rules (NEW FUNCTION)
+#'
+#' @param admin_sequence Administration sequence
+#' @param pattern_rules Pattern rules for this questionnaire
+#' @param item_definitions Item definitions
+#' @param survey_config Survey configuration
+#' @param reduction_method Reduction method
+#' @param stop_low_only Stop low only flag
+#' @return List of pages
+generate_unidimensional_pages_patterns <- function(admin_sequence, pattern_rules,
+                                                   item_definitions, survey_config,
+                                                   reduction_method, stop_low_only) {
+  pages <- list()
+  
+  for (i in 1:nrow(admin_sequence)) {
+    item_id <- admin_sequence$item_id[i]
+    original_pos <- admin_sequence$original_position[i]
+    
+    # Create page for this item
+    page <- list(
+      name = as.character(original_pos),
+      elements = list()
+    )
+    
+    # Initialize question with proper field ordering
+    question <- list()
+    
+    # 1. type (always first)
+    question$type <- "rating"
+    
+    # 2. name
+    question$name <- item_id
+    
+    # 3. visibleIf (if applicable) - PATTERN-BASED
+    visibility_condition <- NULL
+    
+    # Generate pattern-based visibility condition for non-first items
+    if (i > 1 && reduction_method == "sc_ep" && !is.null(pattern_rules)) {
+      prev_items <- admin_sequence$item_id[1:(i-1)]
+      
+      # Get pattern rules for previous position
+      if (i-1 <= length(pattern_rules)) {
+        visibility_condition <- generate_pattern_visibility_condition(
+          prev_items = prev_items,
+          pattern_rules = pattern_rules[[i-1]],
+          stop_low_only = stop_low_only
+        )
+      }
+    }
+    
+    # Add visibleIf if condition exists
+    if (!is.null(visibility_condition)) {
+      question$visibleIf <- visibility_condition
+    }
+    
+    # 4. title
+    question$title <- item_definitions[[item_id]]$item_text
+    
+    # 5. requiredIf (mirrors visibleIf for conditional items)
+    if (!is.null(visibility_condition)) {
+      question$requiredIf <- visibility_condition
+    }
+    
+    # 6. isRequired
+    # Only the first item is unconditionally required
+    if (i == 1) {
+      question$isRequired <- TRUE
+    }
+    
+    # 7. autoGenerate
+    question$autoGenerate <- survey_config$autoGenerate %||% FALSE
+    
+    # 8. rateValues
+    question$rateValues <- item_definitions[[item_id]]$rateValues
+    
+    # 9. displayMode
+    question$displayMode <- survey_config$displayMode %||% "buttons"
+    
+    page$elements[[1]] <- question
+    pages[[i]] <- page
+  }
+  
+  return(pages)
+}
+
+#' Generate Pages for Multi-construct with Pattern Rules (NEW FUNCTION)
+#'
+#' @param admin_sequence Administration sequence
+#' @param pattern_rules Pattern rules by construct
+#' @param item_definitions Item definitions
+#' @param survey_config Survey configuration
+#' @param data_config Data configuration
+#' @param method_results Method results
+#' @param reduction_method Reduction method
+#' @param stop_low_only Stop low only flag
+#' @return List of pages
+generate_multi_construct_pages_patterns <- function(admin_sequence, pattern_rules,
+                                                    item_definitions, survey_config,
+                                                    data_config, method_results,
+                                                    reduction_method, stop_low_only) {
+  pages <- list()
+  
+  # Track which items from each construct have been presented
+  construct_item_counts <- list()
+  for (cn in names(data_config$constructs)) {
+    construct_item_counts[[cn]] <- 0
+  }
+  
+  # Get min_items_per_construct
+  min_items_per_construct <- method_results$reduction_result$constraints_applied$min_items_per_construct %||% 
+    data_config$constraints$min_items_per_construct %||% 
+    0
+  
+  for (i in 1:nrow(admin_sequence)) {
+    item_id <- admin_sequence$item_id[i]
+    original_pos <- admin_sequence$original_position[i]
+    item_construct <- admin_sequence$construct[i]
+    
+    # Update construct item count
+    construct_item_counts[[item_construct]] <- construct_item_counts[[item_construct]] + 1
+    within_construct_pos <- construct_item_counts[[item_construct]]
+    
+    # Create page
+    page <- list(
+      name = as.character(original_pos),
+      elements = list()
+    )
+    
+    # Initialize question
+    question <- list()
+    question$type <- "rating"
+    question$name <- item_id
+    
+    # Generate pattern-based visibility condition
+    visibility_condition <- NULL
+    
+    if (within_construct_pos > 1 && reduction_method == "sc_ep" && 
+        !is.null(pattern_rules[[item_construct]])) {
+      # Get previous items FROM THE SAME CONSTRUCT
+      prev_construct_items <- admin_sequence$item_id[
+        admin_sequence$construct == item_construct &
+          1:nrow(admin_sequence) < i
+      ]
+      
+      # Get pattern rules for this construct at this position
+      construct_pattern_rules <- pattern_rules[[item_construct]]
+      
+      if (length(prev_construct_items) > 0 && 
+          length(prev_construct_items) <= length(construct_pattern_rules)) {
+        visibility_condition <- generate_pattern_visibility_condition(
+          prev_items = prev_construct_items,
+          pattern_rules = construct_pattern_rules[[length(prev_construct_items)]],
+          stop_low_only = stop_low_only
+        )
+      }
+    }
+    
+    # Add visibleIf if condition exists (but not for unconditionally required items)
+    if (i == 1 || (min_items_per_construct > 0 && within_construct_pos <= min_items_per_construct)) {
+      # No visibleIf for unconditionally required items
+    } else if (!is.null(visibility_condition)) {
+      question$visibleIf <- visibility_condition
+    }
+    
+    # Rest of question setup
+    question$title <- item_definitions[[item_id]]$item_text
+    
+    if (!is.null(question$visibleIf)) {
+      question$requiredIf <- question$visibleIf
+    }
+    
+    if (i == 1 || (min_items_per_construct > 0 && 
+                   within_construct_pos <= min_items_per_construct)) {
+      question$isRequired <- TRUE
+    }
+    
+    question$autoGenerate <- survey_config$autoGenerate %||% FALSE
+    question$rateValues <- item_definitions[[item_id]]$rateValues
+    question$displayMode <- survey_config$displayMode %||% "buttons"
+    
+    page$elements[[1]] <- question
+    pages[[i]] <- page
+  }
+  
+  return(pages)
+}
+
+# [Keep all the original page generation functions for backward compatibility]
+# generate_unidimensional_pages (original)
+# generate_multi_construct_pages (original)
+
+#' Generate Pages for Unidimensional Questionnaire (ORIGINAL - KEPT FOR COMPATIBILITY)
 #'
 #' @param admin_sequence Administration sequence
 #' @param boundary_table Boundary table
@@ -2029,7 +1913,7 @@ generate_unidimensional_pages <- function(admin_sequence, boundary_table, item_d
   return(pages)
 }
 
-#' Generate Pages for Multi-construct Questionnaire
+#' Generate Pages for Multi-construct Questionnaire (ORIGINAL - KEPT FOR COMPATIBILITY)
 #'
 #' @param admin_sequence Administration sequence
 #' @param boundary_tables Boundary tables by construct
@@ -2220,6 +2104,11 @@ generate_multi_construct_pages <- function(admin_sequence, boundary_tables, item
   return(pages)
 }
 
+# [Keep all other helper functions unchanged]
+# generate_boundary_tables_html
+# generate_surveyjs_html
+# generate_deployment_guide
+
 #' Generate HTML Tables for Boundaries
 #'
 #' @param boundary_tables List of boundary tables
@@ -2348,7 +2237,7 @@ generate_surveyjs_html <- function(json_config, output_dir) {
   writeLines(html_content, file.path(output_dir, "surveyjs_example.html"))
 }
 
-#' Generate Human-Readable Deployment Guide
+#' Generate Human-Readable Deployment Guide (ENHANCED WITH PATTERN INFO)
 #'
 #' @param method_results Method results
 #' @param prepared_data Prepared data
@@ -2358,9 +2247,11 @@ generate_surveyjs_html <- function(json_config, output_dir) {
 #' @param output_dir Output directory
 #' @param is_optimized Whether this is an optimized method
 #' @param optimization_results Full optimization results (if optimized)
+#' @param pattern_rules Pattern rules (if applicable)
 generate_deployment_guide <- function(method_results, prepared_data, boundary_tables,
                                       admin_sequence, item_definitions, output_dir,
-                                      is_optimized = FALSE, optimization_results = NULL) {
+                                      is_optimized = FALSE, optimization_results = NULL,
+                                      pattern_rules = NULL) {
   
   guide_file <- file.path(output_dir, "deployment_guide.txt")
   
@@ -2386,6 +2277,12 @@ generate_deployment_guide <- function(method_results, prepared_data, boundary_ta
   if (is_optimized) {
     guide_text <- paste0(guide_text,
                          "Status: OPTIMIZED\n")
+  }
+  
+  # Add pattern-specific note if applicable
+  if (!is.null(pattern_rules) && method_results$combination$reduction == "sc_ep") {
+    guide_text <- paste0(guide_text,
+                         "Boundary Type: PATTERN-SPECIFIC (High Fidelity)\n")
   }
   
   guide_text <- paste0(guide_text,
@@ -2461,16 +2358,25 @@ generate_deployment_guide <- function(method_results, prepared_data, boundary_ta
     guide_text <- paste0(guide_text,
                          "No early stopping - all items must be administered.\n")
   } else {
+    if (!is.null(pattern_rules) && method_results$combination$reduction == "sc_ep") {
+      guide_text <- paste0(guide_text,
+                           "Early stopping is based on EXACT RESPONSE PATTERNS.\n",
+                           "See pattern_rules_summary.txt for pattern-specific rules.\n",
+                           "See stopping_boundaries.html for sum-score approximations.\n\n")
+    } else {
+      guide_text <- paste0(guide_text,
+                           "Early stopping is based on cumulative scores.\n",
+                           "See stopping_boundaries.html for detailed rules.\n\n")
+    }
+    
     guide_text <- paste0(guide_text,
-                         "Early stopping is based on cumulative scores.\n",
-                         "See stopping_boundaries.html for detailed rules.\n\n",
                          "Key points:\n",
-                         "- Low risk: Stop when cumulative score is sufficiently low\n")
+                         "- Low risk: Stop when conditions indicate low risk\n")
     
     stop_low_only <- prepared_data$config$constraints$stop_low_only %||% FALSE
     if (!stop_low_only && method_results$combination$gamma_1 < 1.0) {
       guide_text <- paste0(guide_text,
-                           "- High risk: Stop when cumulative score is sufficiently high\n")
+                           "- High risk: Stop when conditions indicate high risk\n")
     } else {
       guide_text <- paste0(guide_text,
                            "- High risk: No early stopping (complete assessment required)\n")
@@ -2486,6 +2392,13 @@ generate_deployment_guide <- function(method_results, prepared_data, boundary_ta
                        "- stopping_boundaries.html: Visual presentation of boundaries\n",
                        "- administration_sequence.csv: Complete item ordering\n",
                        "- implementation_params.rds: R object with all parameters\n")
+  
+  if (!is.null(pattern_rules)) {
+    guide_text <- paste0(guide_text,
+                         "- pattern_rules.rds: Pattern-specific stopping rules (R format)\n",
+                         "- pattern_rules.json: Pattern-specific stopping rules (JSON format)\n",
+                         "- pattern_rules_summary.txt: Human-readable pattern rules summary\n")
+  }
   
   # Add optimization section if applicable
   if (is_optimized && !is.null(optimization_results)) {
