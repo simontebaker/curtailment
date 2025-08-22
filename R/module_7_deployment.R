@@ -730,7 +730,7 @@ generate_stopping_boundaries <- function(method_results, prepared_data, output_d
   return(boundary_tables)
 }
 
-#' Generate Single Boundary Table (COMPLETE UPDATED VERSION)
+#' Generate Single Boundary Table (FIXED VERSION)
 #'
 #' @param ordered_items Ordered items for this construct/total
 #' @param config Data configuration
@@ -796,8 +796,22 @@ generate_single_boundary_table <- function(ordered_items, config, training_param
       boundary_df$method_notes[k] <- "Deterministic boundaries (exact sum scores)"
     }
     
-  } else if (reduction %in% c("sc_ep", "sc_sor", "sc_mor") && gamma_0_valid && gamma_1_valid) {
-    # Stochastic curtailment - only if gamma values are numeric
+  } else if (reduction == "sc_ep" && gamma_0_valid && gamma_1_valid) {
+    # SC-EP: Pattern-specific - DO NOT GENERATE SUM-SCORE BOUNDARIES
+    # The pattern rules handle everything, so we just provide informational text
+    
+    for (k in 1:n_items) {
+      boundary_df$items_included[k] <- paste(ordered_items[1:k], collapse = ", ")
+      boundary_df$low_risk_boundary[k] <- "Pattern-dependent"
+      boundary_df$high_risk_boundary[k] <- ifelse(stop_low_only || gamma_1 >= 1.0, 
+                                                  "N/A", 
+                                                  "Pattern-dependent")
+      boundary_df$method_notes[k] <- paste0("SC-EP pattern-specific (γ₀=", gamma_0, 
+                                            ", γ₁=", gamma_1, ") - see pattern_rules.json")
+    }
+    
+  } else if (reduction %in% c("sc_sor", "sc_mor") && gamma_0_valid && gamma_1_valid) {
+    # Stochastic curtailment with regression - keep existing logic
     boundaries <- calculate_sc_boundaries(
       ordered_items, training_params, reduction,
       gamma_0, gamma_1, cutoff
@@ -815,10 +829,7 @@ generate_single_boundary_table <- function(ordered_items, config, training_param
       }
       
       # Method-specific notes
-      if (reduction == "sc_ep") {
-        boundary_df$method_notes[k] <- paste0("SC-EP boundaries (γ₀=", gamma_0, ", γ₁=", gamma_1, 
-                                              ") - sum score aggregated")
-      } else if (reduction == "sc_sor") {
+      if (reduction == "sc_sor") {
         boundary_df$method_notes[k] <- paste0("SC-SOR regression-based (γ₀=", gamma_0, ", γ₁=", gamma_1, ")")
       } else if (reduction == "sc_mor") {
         boundary_df$method_notes[k] <- paste0("SC-MOR approximate boundaries (γ₀=", gamma_0, ", γ₁=", gamma_1, ")")
