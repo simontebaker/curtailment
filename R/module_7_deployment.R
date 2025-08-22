@@ -606,7 +606,7 @@ generate_stopping_boundaries <- function(method_results, prepared_data, output_d
   ordered_items <- method_results$ordering_result$ordered_items
   
   # Check constraints
-  constraints <- prepared_data$config$constraints %||% list()
+  constraints <- method_results$reduction_result$constraints_applied %||% list()
   stop_low_only <- constraints$stop_low_only %||% FALSE
   
   # Initialize results
@@ -1481,7 +1481,7 @@ generate_surveyjs_json <- function(method_results, prepared_data, boundary_table
   
   # Get method details
   reduction_method <- method_results$combination$reduction
-  stop_low_only <- prepared_data$config$constraints$stop_low_only %||% FALSE
+  stop_low_only <- method_results$reduction_result$constraints_applied$stop_low_only %||% FALSE
   use_patterns <- !is.null(pattern_rules) && reduction_method == "sc_ep"
   
   # Process based on questionnaire type
@@ -1775,8 +1775,9 @@ generate_cumulative_pattern_visibility <- function(construct_items_so_far,
     return(NULL)
   }
   
-  # Build conditions for each position that could have stopped
-  all_continue_conditions <- character()
+  # Collect conditions for each position
+  low_risk_conditions <- character()  # Patterns that would stop
+  high_risk_conditions <- character() # Patterns that force continuation
   
   # Check each previous position
   for (k in 1:length(construct_items_so_far)) {
@@ -1786,29 +1787,26 @@ generate_cumulative_pattern_visibility <- function(construct_items_so_far,
     if (is.null(pos_rules)) next
     
     items_at_k <- construct_items_so_far[1:k]
-    stop_conditions_at_k <- character()
     
-    # Collect all patterns that would stop at position k
-    # Low-risk patterns
+    # Collect low-risk patterns (these stop administration)
     if (!is.null(pos_rules$low_risk_patterns)) {
       for (pattern_name in names(pos_rules$low_risk_patterns)) {
         pattern_info <- pos_rules$low_risk_patterns[[pattern_name]]
         scores <- pattern_info$scores
         
         if (length(scores) == k) {
-          # Build condition for this pattern
           checks <- character()
           for (j in 1:k) {
             checks <- c(checks, paste0("{", items_at_k[j], "} == ", scores[j]))
           }
           pattern_cond <- paste0("(", paste(checks, collapse = " and "), ")")
-          stop_conditions_at_k <- c(stop_conditions_at_k, pattern_cond)
+          low_risk_conditions <- c(low_risk_conditions, pattern_cond)
         }
       }
     }
     
-    # High-risk patterns (if allowed)
-    if (!stop_low_only && !is.null(pos_rules$high_risk_patterns)) {
+    # Collect high-risk patterns (these force continuation when stop_low_only = TRUE)
+    if (stop_low_only && !is.null(pos_rules$high_risk_patterns)) {
       for (pattern_name in names(pos_rules$high_risk_patterns)) {
         pattern_info <- pos_rules$high_risk_patterns[[pattern_name]]
         scores <- pattern_info$scores
@@ -1819,21 +1817,48 @@ generate_cumulative_pattern_visibility <- function(construct_items_so_far,
             checks <- c(checks, paste0("{", items_at_k[j], "} == ", scores[j]))
           }
           pattern_cond <- paste0("(", paste(checks, collapse = " and "), ")")
-          stop_conditions_at_k <- c(stop_conditions_at_k, pattern_cond)
+          high_risk_conditions <- c(high_risk_conditions, pattern_cond)
         }
       }
     }
-    
-    # Create NOT condition for this position
-    if (length(stop_conditions_at_k) > 0) {
-      not_stopped_at_k <- paste0("!(", paste(stop_conditions_at_k, collapse = " or "), ")")
-      all_continue_conditions <- c(all_continue_conditions, not_stopped_at_k)
-    }
   }
   
-  # Combine all conditions with AND
-  if (length(all_continue_conditions) > 0) {
-    return(paste(all_continue_conditions, collapse = " and "))
+  # Build the visibility condition based on stop_low_only
+  if (stop_low_only) {
+    # With stop_low_only = TRUE:
+    # Show if: NOT(low-risk) OR (high-risk)
+    visibility_parts <- character()
+    
+    if (length(low_risk_conditions) > 0) {
+      # NOT(any low-risk pattern)
+      not_low_risk <- paste0("!(", paste(low_risk_conditions, collapse = " or "), ")")
+      visibility_parts <- c(visibility_parts, not_low_risk)
+    }
+    
+    if (length(high_risk_conditions) > 0) {
+      # OR any high-risk pattern (forces continuation)
+      any_high_risk <- paste0("(", paste(high_risk_conditions, collapse = " or "), ")")
+      visibility_parts <- c(visibility_parts, any_high_risk)
+    }
+    
+    if (length(visibility_parts) > 0) {
+      if (length(high_risk_conditions) > 0 && length(low_risk_conditions) > 0) {
+        # Both conditions: NOT(low) OR high
+        return(paste(visibility_parts, collapse = " or "))
+      } else {
+        # Only one type of condition
+        return(visibility_parts[1])
+      }
+    }
+    
+  } else {
+    # With stop_low_only = FALSE:
+    # Show if: NOT(low-risk OR high-risk)
+    all_stop_conditions <- c(low_risk_conditions, high_risk_conditions)
+    
+    if (length(all_stop_conditions) > 0) {
+      return(paste0("!(", paste(all_stop_conditions, collapse = " or "), ")"))
+    }
   }
   
   return(NULL)
@@ -2535,7 +2560,7 @@ generate_deployment_guide <- function(method_results, prepared_data, boundary_ta
                          "Key points:\n",
                          "- Low risk: Stop when conditions indicate low risk\n")
     
-    stop_low_only <- prepared_data$config$constraints$stop_low_only %||% FALSE
+    stop_low_only <- method_results$reduction_result$constraints_applied$stop_low_only %||% FALSE
     if (!stop_low_only && method_results$combination$gamma_1 < 1.0) {
       guide_text <- paste0(guide_text,
                            "- High risk: Stop when conditions indicate high risk\n")
