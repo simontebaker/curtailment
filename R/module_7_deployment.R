@@ -449,7 +449,7 @@ generate_pattern_rules <- function(method_results, prepared_data, output_dir) {
   return(all_pattern_rules)
 }
 
-#' Generate Pattern-Specific Boundary Table (NEW FUNCTION)
+#' Generate Pattern-Specific Boundary Table (FIXED - NO AGGREGATION)
 #'
 #' @param ordered_items Ordered items
 #' @param training_params Training parameters with lookup tables
@@ -482,7 +482,7 @@ generate_pattern_boundary_table <- function(ordered_items, training_params,
       high_risk_patterns <- list()
       neutral_patterns <- list()
       
-      # Check each pattern at this position
+      # Check each pattern INDIVIDUALLY - NO AGGREGATION BY SUM SCORE
       for (pattern_str in names(lookup_tables[[k]])) {
         probs <- lookup_tables[[k]][[pattern_str]]
         
@@ -497,7 +497,7 @@ generate_pattern_boundary_table <- function(ordered_items, training_params,
           prob_high = probs["prob_high"]
         )
         
-        # Classify pattern
+        # Classify pattern based on ITS OWN probabilities, not aggregated
         if (!is.na(probs["prob_low"]) && probs["prob_low"] >= gamma_0) {
           low_risk_patterns[[pattern_str]] <- pattern_info
         } else if (!is.na(probs["prob_high"]) && probs["prob_high"] >= gamma_1) {
@@ -1770,9 +1770,9 @@ generate_unidimensional_pages_patterns <- function(admin_sequence, pattern_rules
 #'   return(pages)
 #' }
 
-#' Generate Cumulative Pattern Visibility Condition
+#' Generate Cumulative Pattern Visibility Condition (FIXED)
 #'
-#' Creates a visibility condition that checks ALL previous positions haven't stopped
+#' Creates a visibility condition that checks if we should have stopped at any previous position
 #'
 #' @param construct_items_so_far All items from this construct seen so far
 #' @param pattern_rules Pattern rules for this construct
@@ -1786,9 +1786,10 @@ generate_cumulative_pattern_visibility <- function(construct_items_so_far,
     return(NULL)
   }
   
-  # Collect conditions for each position
-  low_risk_conditions <- character()  # Patterns that would stop
-  high_risk_conditions <- character() # Patterns that force continuation
+  # We need to check if we SHOULD HAVE STOPPED at any previous position
+  # This means checking each position k with ONLY the first k items
+  
+  stop_conditions <- character()
   
   # Check each previous position
   for (k in 1:length(construct_items_so_far)) {
@@ -1797,79 +1798,58 @@ generate_cumulative_pattern_visibility <- function(construct_items_so_far,
     pos_rules <- pattern_rules[[k]]
     if (is.null(pos_rules)) next
     
+    # Get ONLY the first k items for checking position k
     items_at_k <- construct_items_so_far[1:k]
     
-    # Collect low-risk patterns (these stop administration)
+    # Collect patterns that would have stopped at position k
+    position_stop_conditions <- character()
+    
+    # Low-risk patterns at position k
     if (!is.null(pos_rules$low_risk_patterns)) {
       for (pattern_name in names(pos_rules$low_risk_patterns)) {
         pattern_info <- pos_rules$low_risk_patterns[[pattern_name]]
         scores <- pattern_info$scores
         
+        # CRITICAL: Only check patterns that match the number of items at position k
         if (length(scores) == k) {
           checks <- character()
           for (j in 1:k) {
             checks <- c(checks, paste0("{", items_at_k[j], "} == ", scores[j]))
           }
           pattern_cond <- paste0("(", paste(checks, collapse = " and "), ")")
-          low_risk_conditions <- c(low_risk_conditions, pattern_cond)
+          position_stop_conditions <- c(position_stop_conditions, pattern_cond)
         }
       }
     }
     
-    # Collect high-risk patterns (these force continuation when stop_low_only = TRUE)
-    if (stop_low_only && !is.null(pos_rules$high_risk_patterns)) {
+    # High-risk patterns at position k (if not stop_low_only)
+    if (!stop_low_only && !is.null(pos_rules$high_risk_patterns)) {
       for (pattern_name in names(pos_rules$high_risk_patterns)) {
         pattern_info <- pos_rules$high_risk_patterns[[pattern_name]]
         scores <- pattern_info$scores
         
+        # CRITICAL: Only check patterns that match the number of items at position k
         if (length(scores) == k) {
           checks <- character()
           for (j in 1:k) {
             checks <- c(checks, paste0("{", items_at_k[j], "} == ", scores[j]))
           }
           pattern_cond <- paste0("(", paste(checks, collapse = " and "), ")")
-          high_risk_conditions <- c(high_risk_conditions, pattern_cond)
+          position_stop_conditions <- c(position_stop_conditions, pattern_cond)
         }
       }
     }
+    
+    # Add all stop conditions for this position
+    if (length(position_stop_conditions) > 0) {
+      stop_conditions <- c(stop_conditions, position_stop_conditions)
+    }
   }
   
-  # Build the visibility condition based on stop_low_only
-  if (stop_low_only) {
-    # With stop_low_only = TRUE:
-    # Show if: NOT(low-risk) OR (high-risk)
-    visibility_parts <- character()
-    
-    if (length(low_risk_conditions) > 0) {
-      # NOT(any low-risk pattern)
-      not_low_risk <- paste0("!(", paste(low_risk_conditions, collapse = " or "), ")")
-      visibility_parts <- c(visibility_parts, not_low_risk)
-    }
-    
-    if (length(high_risk_conditions) > 0) {
-      # OR any high-risk pattern (forces continuation)
-      any_high_risk <- paste0("(", paste(high_risk_conditions, collapse = " or "), ")")
-      visibility_parts <- c(visibility_parts, any_high_risk)
-    }
-    
-    if (length(visibility_parts) > 0) {
-      if (length(high_risk_conditions) > 0 && length(low_risk_conditions) > 0) {
-        # Both conditions: NOT(low) OR high
-        return(paste(visibility_parts, collapse = " or "))
-      } else {
-        # Only one type of condition
-        return(visibility_parts[1])
-      }
-    }
-    
-  } else {
-    # With stop_low_only = FALSE:
-    # Show if: NOT(low-risk OR high-risk)
-    all_stop_conditions <- c(low_risk_conditions, high_risk_conditions)
-    
-    if (length(all_stop_conditions) > 0) {
-      return(paste0("!(", paste(all_stop_conditions, collapse = " or "), ")"))
-    }
+  # Return condition to CONTINUE (none of the stop conditions were met)
+  if (length(stop_conditions) > 0) {
+    # Continue if NONE of the stopping conditions at ANY previous position were met
+    return(paste0("!(", paste(stop_conditions, collapse = " or "), ")"))
   }
   
   return(NULL)
