@@ -951,7 +951,7 @@ if (optimization_performed) {
 # ============================================================================
 # Module 8: Deployment Validation Module
 # ============================================================================
-# Purpose: Validate deployment artifacts by simulating the deployed questionnaire
+# Purpose: Validate deployment artifacts by simulating the actual JSON logic
 #          and comparing actual performance to predicted performance
 # ============================================================================
 
