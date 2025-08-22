@@ -1,16 +1,15 @@
 # ============================================================================
-# Module 8: Deployment Validation Module (ENHANCED WITH PATTERN SUPPORT)
+# Module 8: Deployment Validation Module (JSON-BASED VALIDATION)
 # ============================================================================
-# Purpose: Validate deployment artifacts by simulating the deployed questionnaire
+# Purpose: Validate deployment artifacts by simulating the actual JSON logic
 #          and comparing actual performance to predicted performance
-#          NOW WITH: Full pattern-specific validation for SC-EP method
 # ============================================================================
 
 # Required packages
-required_packages <- c("ggplot2", "gridExtra")
+required_packages <- c("ggplot2", "gridExtra", "jsonlite")
 for (pkg in required_packages) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
-    message(paste("Note: Package", pkg, "is recommended for visualization functionality"))
+    message(paste("Note: Package", pkg, "is required for this module"))
   }
 }
 
@@ -70,7 +69,7 @@ extract_boundary_value <- function(boundary_text, type = "low") {
   return(value)
 }
 
-#' Validate Deployment Package (ENHANCED)
+#' Validate Deployment Package (MAIN ENTRY POINT)
 #'
 #' @param deployment_package Deployment package from Module 7
 #' @param prepared_data Prepared data from Module 1
@@ -107,17 +106,11 @@ validate_deployment <- function(deployment_package,
   # Get implementation parameters
   impl_params <- deployment_package$implementation_params
   
-  # Check if pattern-specific boundaries are being used
-  use_patterns <- impl_params$use_pattern_boundaries %||% FALSE
-  if (use_patterns) {
-    cat("Using PATTERN-SPECIFIC boundaries for SC-EP validation\n")
-  }
-  
-  # 1. Simulate deployed questionnaire
-  cat("\n1. Simulating deployed questionnaire...\n")
+  # 1. Simulate deployed questionnaire using JSON
+  cat("\n1. Simulating deployed questionnaire from JSON...\n")
   simulation_results <- simulate_deployed_questionnaire(
     boundary_tables = deployment_package$boundary_tables,
-    pattern_rules = deployment_package$pattern_rules,  # Pass pattern rules
+    pattern_rules = deployment_package$pattern_rules,
     admin_sequence = deployment_package$admin_sequence,
     validation_data = validation_data,
     impl_params = impl_params,
@@ -144,13 +137,10 @@ validate_deployment <- function(deployment_package,
   
   # 4. Validate continuation logic
   cat("\n4. Validating continuation logic...\n")
-  continuation_validation <- validate_continuation_logic_simplified(
+  continuation_validation <- validate_continuation_logic_json_based(
     simulation_results = simulation_results,
-    boundary_tables = deployment_package$boundary_tables,
-    pattern_rules = deployment_package$pattern_rules,
     admin_sequence = deployment_package$admin_sequence,
     validation_data = validation_data,
-    impl_params = impl_params,
     prepared_data = prepared_data
   )
   
@@ -183,7 +173,7 @@ validate_deployment <- function(deployment_package,
     boundary_analysis = boundary_analysis,
     simulation_results = simulation_results,
     validation_passed = assess_validation_success(performance_comparison, continuation_validation),
-    pattern_based = use_patterns,
+    json_based = TRUE,
     timestamp = Sys.time()
   )
   
@@ -196,10 +186,13 @@ validate_deployment <- function(deployment_package,
   return(validation_results)
 }
 
-#' Simulate Deployed Questionnaire (ENHANCED)
+#' Simulate Deployed Questionnaire (JSON-BASED)
 #'
-#' @param boundary_tables Stopping boundary tables
-#' @param pattern_rules Pattern-specific rules (if applicable)
+#' This simulates what the actual SurveyJS implementation would do
+#' based on the JSON visibility conditions
+#'
+#' @param boundary_tables Stopping boundary tables (not used in JSON simulation)
+#' @param pattern_rules Pattern-specific rules (not used in JSON simulation)
 #' @param admin_sequence Administration sequence
 #' @param validation_data Validation data
 #' @param impl_params Implementation parameters
@@ -219,85 +212,48 @@ simulate_deployed_questionnaire <- function(boundary_tables, pattern_rules = NUL
   stopped_at <- numeric(n_respondents)
   stop_reasons <- character(n_respondents)
   classifications <- numeric(n_respondents)
-  stop_patterns <- character(n_respondents)  # Track pattern that triggered stop
   
-  # Get method configuration
-  reduction_method <- impl_params$method_combination$reduction
-  stop_low_only <- prepared_data$config$constraints$stop_low_only %||% FALSE
-  min_items_per_construct <- prepared_data$config$constraints$min_items_per_construct %||% 1
-  use_patterns <- impl_params$use_pattern_boundaries %||% FALSE
+  # Load the actual JSON to simulate
+  surveyjs_json_file <- file.path("deployment", "surveyjs_config.json")
+  if (!file.exists(surveyjs_json_file)) {
+    stop("surveyjs_config.json not found. Please ensure Module 7 has been run.")
+  }
+  
+  # Load JSON configuration
+  if (!requireNamespace("jsonlite", quietly = TRUE)) {
+    stop("jsonlite package is required to load JSON configuration")
+  }
+  
+  surveyjs_config <- jsonlite::fromJSON(surveyjs_json_file)
   
   cat("  Processing", n_respondents, "respondents...\n")
-  if (use_patterns) {
-    cat("  Using pattern-specific stopping rules\n")
-  }
+  cat("  Simulating actual SurveyJS visibility logic from JSON\n")
+  
   pb <- txtProgressBar(min = 0, max = n_respondents, style = 3)
   
-  # Simulate each respondent's questionnaire experience
+  # Simulate each respondent
   for (i in seq_len(n_respondents)) {
     
-    if (prepared_data$config$questionnaire_type == "unidimensional") {
-      # Unidimensional simulation
-      if (use_patterns && !is.null(pattern_rules)) {
-        # Use pattern-specific simulation
-        result <- simulate_unidimensional_respondent_patterns(
-          respondent_idx = i,
-          validation_data = validation_data,
-          pattern_rules = pattern_rules[["total"]],
-          ordered_items = ordered_items,
-          reduction_method = reduction_method,
-          stop_low_only = stop_low_only,
-          cutoff = prepared_data$config$cutoffs[["total"]]
-        )
-      } else {
-        # Use sum-score simulation
-        result <- simulate_unidimensional_respondent(
-          respondent_idx = i,
-          validation_data = validation_data,
-          boundary_table = boundary_tables[["total"]],
-          ordered_items = ordered_items,
-          reduction_method = reduction_method,
-          stop_low_only = stop_low_only,
-          cutoff = prepared_data$config$cutoffs[["total"]]
-        )
-      }
-    } else {
-      # Multi-construct simulation
-      if (use_patterns && !is.null(pattern_rules)) {
-        # Use pattern-specific simulation
-        result <- simulate_multicontruct_respondent_patterns(
-          respondent_idx = i,
-          validation_data = validation_data,
-          pattern_rules = pattern_rules,
-          admin_sequence = admin_sequence,
-          prepared_data = prepared_data,
-          reduction_method = reduction_method,
-          stop_low_only = stop_low_only,
-          min_items_per_construct = min_items_per_construct
-        )
-      } else {
-        # Use sum-score simulation
-        result <- simulate_multicontruct_respondent(
-          respondent_idx = i,
-          validation_data = validation_data,
-          boundary_tables = boundary_tables,
-          admin_sequence = admin_sequence,
-          prepared_data = prepared_data,
-          reduction_method = reduction_method,
-          stop_low_only = stop_low_only,
-          min_items_per_construct = min_items_per_construct
-        )
+    # Simulate based on JSON visibility conditions
+    result <- simulate_json_logic_for_respondent(
+      respondent_idx = i,
+      validation_data = validation_data,
+      surveyjs_pages = surveyjs_config$pages,
+      admin_sequence = admin_sequence,
+      prepared_data = prepared_data
+    )
+    
+    # Store results
+    for (item in result$items_administered) {
+      item_idx <- which(ordered_items == item)
+      if (length(item_idx) > 0) {
+        items_administered[i, item_idx[1]] <- TRUE
       }
     }
     
-    # Store results
-    items_administered[i, 1:result$items_used] <- TRUE
     stopped_at[i] <- result$items_used
     stop_reasons[i] <- result$stop_reason
     classifications[i] <- result$classification
-    if (!is.null(result$stop_pattern)) {
-      stop_patterns[i] <- result$stop_pattern
-    }
     
     setTxtProgressBar(pb, i)
   }
@@ -308,445 +264,207 @@ simulate_deployed_questionnaire <- function(boundary_tables, pattern_rules = NUL
     stopped_at = stopped_at,
     stop_reasons = stop_reasons,
     classifications = classifications,
-    stop_patterns = stop_patterns,
     n_items_used = stopped_at,
     ordered_items = ordered_items,
-    pattern_based = use_patterns
+    json_based = TRUE  # Flag that this used JSON simulation
   ))
 }
 
-#' Simulate Single Respondent - Unidimensional with Patterns (NEW)
+#' Simulate JSON Logic for a Single Respondent
 #'
 #' @param respondent_idx Respondent index
 #' @param validation_data Validation data
-#' @param pattern_rules Pattern rules
-#' @param ordered_items Ordered items
-#' @param reduction_method Reduction method
-#' @param stop_low_only Stop low only flag
-#' @param cutoff Classification cutoff
-#' @return Simulation result for this respondent
-simulate_unidimensional_respondent_patterns <- function(respondent_idx, validation_data, 
-                                                        pattern_rules, ordered_items,
-                                                        reduction_method, stop_low_only,
-                                                        cutoff) {
-  
-  n_items <- length(ordered_items)
-  current_sum <- 0
-  
-  for (k in seq_along(ordered_items)) {
-    item <- ordered_items[k]
-    
-    # Add current item response
-    if (item %in% names(validation_data) && !is.na(validation_data[respondent_idx, item])) {
-      current_sum <- current_sum + validation_data[respondent_idx, item]
-    }
-    
-    # Get response pattern so far
-    current_pattern <- character()
-    for (j in 1:k) {
-      item_j <- ordered_items[j]
-      if (item_j %in% names(validation_data)) {
-        current_pattern <- c(current_pattern, 
-                             as.character(validation_data[respondent_idx, item_j]))
-      }
-    }
-    pattern_string <- paste(current_pattern, collapse = "_")
-    
-    # Check pattern-specific stopping conditions
-    if (reduction_method == "sc_ep" && k <= length(pattern_rules)) {
-      rules <- pattern_rules[[k]]
-      
-      if (!is.null(rules)) {
-        # Check low-risk patterns
-        if (!is.null(rules$low_risk_patterns) && 
-            pattern_string %in% names(rules$low_risk_patterns)) {
-          return(list(
-            items_used = k,
-            stop_reason = "pattern_matched_low_risk",
-            classification = 0,
-            final_sum = current_sum,
-            stop_pattern = pattern_string
-          ))
-        }
-        
-        # Check high-risk patterns (if allowed)
-        if (!stop_low_only && !is.null(rules$high_risk_patterns) &&
-            pattern_string %in% names(rules$high_risk_patterns)) {
-          return(list(
-            items_used = k,
-            stop_reason = "pattern_matched_high_risk",
-            classification = 1,
-            final_sum = current_sum,
-            stop_pattern = pattern_string
-          ))
-        }
-      }
-    }
-  }
-  
-  # Completed all items - no pattern matched
-  final_classification <- ifelse(current_sum >= cutoff, 1, 0)
-  return(list(
-    items_used = n_items,
-    stop_reason = "no_pattern_matched",
-    classification = final_classification,
-    final_sum = current_sum,
-    stop_pattern = NULL
-  ))
-}
-
-#' Simulate Single Respondent - Multi-construct with Patterns (NEW)
-#'
-#' @param respondent_idx Respondent index
-#' @param validation_data Validation data
-#' @param pattern_rules Pattern rules by construct
+#' @param surveyjs_pages Pages from JSON config
 #' @param admin_sequence Administration sequence
 #' @param prepared_data Prepared data
-#' @param reduction_method Reduction method
-#' @param stop_low_only Stop low only flag
-#' @param min_items_per_construct Minimum items per construct
-#' @return Simulation result for this respondent
-simulate_multicontruct_respondent_patterns <- function(respondent_idx, validation_data, 
-                                                       pattern_rules, admin_sequence,
-                                                       prepared_data, reduction_method,
-                                                       stop_low_only, min_items_per_construct) {
+#' @return Simulation result
+simulate_json_logic_for_respondent <- function(respondent_idx, validation_data,
+                                               surveyjs_pages, admin_sequence,
+                                               prepared_data) {
   
-  # Track progress for each construct
-  construct_sums <- list()
-  construct_items_given <- list()
-  construct_items_total <- list()
-  construct_classifications <- list()
-  construct_stopped <- list()
-  construct_patterns <- list()
-  construct_stop_patterns <- list()
+  responses_collected <- list()
+  items_administered <- character()
   
-  # Initialize tracking for each construct
-  for (cn in names(prepared_data$config$constructs)) {
-    construct_sums[[cn]] <- 0
-    construct_items_given[[cn]] <- 0
-    construct_items_total[[cn]] <- length(prepared_data$config$constructs[[cn]])
-    construct_classifications[[cn]] <- NA
-    construct_stopped[[cn]] <- FALSE
-    construct_patterns[[cn]] <- character()
-    construct_stop_patterns[[cn]] <- NULL
-  }
-  
-  total_items_given <- 0
-  num_constructs_stopped_early <- 0
-  total_constructs <- length(prepared_data$config$constructs)
-  
-  # Go through administration sequence
-  for (k in seq_len(nrow(admin_sequence))) {
-    item <- admin_sequence$item_id[k]
-    item_construct <- admin_sequence$construct[k]
+  # Process each page
+  for (page in surveyjs_pages) {
+    # Skip completion page
+    if (!is.null(page$name) && page$name == "completion") next
     
-    # Skip if this construct has already stopped
-    if (construct_stopped[[item_construct]]) {
-      next
+    # Get question from page
+    if (is.null(page$elements) || length(page$elements) == 0) next
+    question <- page$elements[[1]]
+    if (is.null(question)) next
+    
+    item_name <- question$name
+    
+    # Check visibility
+    is_visible <- TRUE
+    
+    # Check isRequired first (always visible)
+    if (!is.null(question$isRequired) && question$isRequired) {
+      is_visible <- TRUE
+    }
+    # Then check visibleIf condition
+    else if (!is.null(question$visibleIf)) {
+      # Evaluate visibility based on COLLECTED responses only
+      is_visible <- evaluate_visibility_with_collected_responses(
+        condition = question$visibleIf,
+        collected_responses = responses_collected
+      )
     }
     
-    # Add response for this item
-    if (item %in% names(validation_data) && !is.na(validation_data[respondent_idx, item])) {
-      response_value <- validation_data[respondent_idx, item]
-      construct_sums[[item_construct]] <- construct_sums[[item_construct]] + response_value
-      construct_patterns[[item_construct]] <- c(construct_patterns[[item_construct]], 
-                                                as.character(response_value))
-    }
-    
-    construct_items_given[[item_construct]] <- construct_items_given[[item_construct]] + 1
-    total_items_given <- total_items_given + 1
-    
-    # Get current pattern for this construct
-    pattern_string <- paste(construct_patterns[[item_construct]], collapse = "_")
-    
-    # Check if this construct can stop (respecting min_items_per_construct)
-    if (reduction_method == "sc_ep" && 
-        construct_items_given[[item_construct]] >= min_items_per_construct &&
-        !is.null(pattern_rules[[item_construct]])) {
+    if (is_visible) {
+      # Item is shown - collect response
+      items_administered <- c(items_administered, item_name)
       
-      # Get pattern rules for this construct at this position
-      within_construct_position <- construct_items_given[[item_construct]]
-      
-      if (within_construct_position <= length(pattern_rules[[item_construct]])) {
-        rules <- pattern_rules[[item_construct]][[within_construct_position]]
-        
-        if (!is.null(rules)) {
-          # Check stopping conditions for this construct
-          stopped <- FALSE
-          
-          # Check low-risk patterns
-          if (!is.null(rules$low_risk_patterns) &&
-              pattern_string %in% names(rules$low_risk_patterns)) {
-            construct_classifications[[item_construct]] <- 0
-            construct_stopped[[item_construct]] <- TRUE
-            construct_stop_patterns[[item_construct]] <- pattern_string
-            stopped <- TRUE
-          }
-          
-          # Check high-risk patterns (if allowed)
-          if (!stopped && !stop_low_only && !is.null(rules$high_risk_patterns) &&
-              pattern_string %in% names(rules$high_risk_patterns)) {
-            construct_classifications[[item_construct]] <- 1
-            construct_stopped[[item_construct]] <- TRUE
-            construct_stop_patterns[[item_construct]] <- pattern_string
-            stopped <- TRUE
-          }
+      if (item_name %in% names(validation_data)) {
+        response_value <- validation_data[respondent_idx, item_name]
+        if (!is.na(response_value)) {
+          responses_collected[[item_name]] <- response_value
         }
       }
     }
-    
-    # Check if all constructs have stopped
-    if (all(unlist(construct_stopped))) {
-      break
-    }
+    # If not visible, item is skipped (no response collected)
   }
   
-  # Count how many constructs stopped early
-  for (cn in names(prepared_data$config$constructs)) {
-    if (construct_stopped[[cn]] && 
-        construct_items_given[[cn]] < construct_items_total[[cn]]) {
-      num_constructs_stopped_early <- num_constructs_stopped_early + 1
-    }
-  }
+  # Determine stop reason and classification
+  n_items_total <- nrow(admin_sequence)
+  n_items_used <- length(items_administered)
   
-  # Determine the stop reason
-  if (num_constructs_stopped_early == total_constructs) {
-    final_stop_reason <- "all_constructs_pattern_matched"
-  } else if (num_constructs_stopped_early > 0) {
-    final_stop_reason <- "some_constructs_pattern_matched"
+  if (n_items_used < n_items_total) {
+    stop_reason <- "stopped_early_per_json"
   } else {
-    final_stop_reason <- "no_patterns_matched"
+    stop_reason <- "completed_all_items"
   }
   
-  # Classify any constructs that didn't stop early
-  for (cn in names(prepared_data$config$constructs)) {
-    if (is.na(construct_classifications[[cn]])) {
+  # Calculate classification based on collected responses
+  if (prepared_data$config$questionnaire_type == "unidimensional") {
+    total_score <- sum(unlist(responses_collected), na.rm = TRUE)
+    cutoff <- prepared_data$config$cutoffs[["total"]]
+    classification <- ifelse(total_score >= cutoff, 1, 0)
+  } else {
+    # Multi-construct classification
+    construct_classifications <- list()
+    for (cn in names(prepared_data$config$constructs)) {
+      construct_items <- prepared_data$config$constructs[[cn]]
+      construct_responses <- responses_collected[names(responses_collected) %in% construct_items]
+      construct_sum <- sum(unlist(construct_responses), na.rm = TRUE)
       cutoff <- prepared_data$config$cutoffs[[cn]]
-      construct_classifications[[cn]] <- ifelse(construct_sums[[cn]] >= cutoff, 1, 0)
+      construct_classifications[[cn]] <- ifelse(construct_sum >= cutoff, 1, 0)
     }
+    classification <- ifelse(sum(unlist(construct_classifications)) > 0, 1, 0)
   }
   
-  # Overall classification
-  overall_classification <- ifelse(sum(unlist(construct_classifications)) > 0, 1, 0)
-  
-  # Combine stop patterns if any
-  all_stop_patterns <- paste(unlist(construct_stop_patterns[!sapply(construct_stop_patterns, is.null)]), 
-                             collapse = ";")
-  
   return(list(
-    items_used = total_items_given,
-    stop_reason = final_stop_reason,
-    classification = overall_classification,
-    construct_classifications = construct_classifications,
-    construct_sums = construct_sums,
-    num_constructs_stopped_early = num_constructs_stopped_early,
-    stop_pattern = if(nchar(all_stop_patterns) > 0) all_stop_patterns else NULL
+    items_used = n_items_used,
+    items_administered = items_administered,
+    responses_collected = responses_collected,
+    stop_reason = stop_reason,
+    classification = classification
   ))
 }
 
-# [Keep original simulation functions for sum-score based stopping]
-#' Simulate Single Respondent - Unidimensional (ORIGINAL)
+#' Evaluate Visibility Condition with Collected Responses
 #'
-#' @param respondent_idx Respondent index
-#' @param validation_data Validation data
-#' @param boundary_table Boundary table
-#' @param ordered_items Ordered items
-#' @param reduction_method Reduction method
-#' @param stop_low_only Stop low only flag
-#' @param cutoff Classification cutoff
-#' @return Simulation result for this respondent
-simulate_unidimensional_respondent <- function(respondent_idx, validation_data, boundary_table,
-                                               ordered_items, reduction_method, stop_low_only,
-                                               cutoff) {
+#' @param condition Visibility condition string
+#' @param collected_responses Responses collected so far
+#' @return Boolean for visibility
+evaluate_visibility_with_collected_responses <- function(condition, collected_responses) {
   
-  current_sum <- 0
-  n_items <- length(ordered_items)
+  # Replace item references with values for collected responses
+  eval_condition <- condition
   
-  for (k in seq_along(ordered_items)) {
-    item <- ordered_items[k]
-    
-    # Add current item response
-    if (item %in% names(validation_data) && !is.na(validation_data[respondent_idx, item])) {
-      current_sum <- current_sum + validation_data[respondent_idx, item]
-    }
-    
-    # Check stopping conditions
-    if (reduction_method != "none" && k <= nrow(boundary_table)) {
-      boundary_row <- boundary_table[k, ]
-      
-      # Check low risk boundary
-      if (boundary_row$low_risk_boundary != "N/A") {
-        boundary_val <- extract_boundary_value(boundary_row$low_risk_boundary, type = "low")
-        if (!is.na(boundary_val) && current_sum <= boundary_val) {
-          return(list(
-            items_used = k,
-            stop_reason = "stopped_early_low_risk",
-            classification = 0,
-            final_sum = current_sum
-          ))
-        }
-      }
-      
-      # Check high risk boundary (if allowed)
-      if (!stop_low_only && boundary_row$high_risk_boundary != "N/A") {
-        boundary_val <- extract_boundary_value(boundary_row$high_risk_boundary, type = "high")
-        if (!is.na(boundary_val) && current_sum >= boundary_val) {
-          return(list(
-            items_used = k,
-            stop_reason = "stopped_early_high_risk",
-            classification = 1,
-            final_sum = current_sum
-          ))
-        }
-      }
-    }
+  for (item_name in names(collected_responses)) {
+    pattern <- paste0("\\{", item_name, "\\}")
+    replacement <- as.character(collected_responses[[item_name]])
+    eval_condition <- gsub(pattern, replacement, eval_condition)
   }
   
-  # Completed all items - no early stopping occurred
-  final_classification <- ifelse(current_sum >= cutoff, 1, 0)
-  return(list(
-    items_used = n_items,
-    stop_reason = "no_early_stopping",
-    classification = final_classification,
-    final_sum = current_sum
-  ))
+  # Check if there are still unreplaced item references
+  # These would be items that weren't shown/collected
+  if (grepl("\\{[^}]+\\}", eval_condition)) {
+    # Can't evaluate condition with missing items
+    # Conservative approach: assume visible
+    return(TRUE)
+  }
+  
+  # Convert to R syntax
+  eval_condition <- gsub(" and ", " & ", eval_condition)
+  eval_condition <- gsub(" or ", " | ", eval_condition)
+  
+  # Evaluate
+  tryCatch({
+    result <- eval(parse(text = eval_condition))
+    return(as.logical(result))
+  }, error = function(e) {
+    warning(paste("Failed to evaluate condition:", condition))
+    return(TRUE)  # Default to visible if can't evaluate
+  })
 }
 
-#' Simulate Single Respondent - Multi-construct (ORIGINAL)
+#' Validate Continuation Logic (JSON-BASED VERSION)
 #'
-#' @param respondent_idx Respondent index
-#' @param validation_data Validation data
-#' @param boundary_tables Boundary tables by construct
+#' @param simulation_results Simulation results
 #' @param admin_sequence Administration sequence
+#' @param validation_data Validation data
 #' @param prepared_data Prepared data
-#' @param reduction_method Reduction method
-#' @param stop_low_only Stop low only flag
-#' @param min_items_per_construct Minimum items per construct
-#' @return Simulation result for this respondent
-simulate_multicontruct_respondent <- function(respondent_idx, validation_data, boundary_tables,
-                                              admin_sequence, prepared_data, reduction_method,
-                                              stop_low_only, min_items_per_construct) {
+#' @return Logic validation results
+validate_continuation_logic_json_based <- function(simulation_results, admin_sequence,
+                                                   validation_data, prepared_data) {
   
-  # Track progress for each construct
-  construct_sums <- list()
-  construct_items_given <- list()
-  construct_items_total <- list()
-  construct_classifications <- list()
-  construct_stopped <- list()
+  # Validate that stopping reasons make sense
+  stop_reasons <- table(simulation_results$stop_reasons)
   
-  # Initialize tracking for each construct
-  for (cn in names(prepared_data$config$constructs)) {
-    construct_sums[[cn]] <- 0
-    construct_items_given[[cn]] <- 0
-    construct_items_total[[cn]] <- length(prepared_data$config$constructs[[cn]])
-    construct_classifications[[cn]] <- NA
-    construct_stopped[[cn]] <- FALSE
-  }
+  # Check for logical consistency
+  logic_checks <- list()
   
-  total_items_given <- 0
-  num_constructs_stopped_early <- 0
-  total_constructs <- length(prepared_data$config$constructs)
+  # 1. Check that some respondents stopped early
+  early_stop_count <- sum(simulation_results$stop_reasons == "stopped_early_per_json")
+  complete_count <- sum(simulation_results$stop_reasons == "completed_all_items")
   
-  # Go through administration sequence
-  for (k in seq_len(nrow(admin_sequence))) {
-    item <- admin_sequence$item_id[k]
-    item_construct <- admin_sequence$construct[k]
-    
-    # Skip if this construct has already stopped
-    if (construct_stopped[[item_construct]]) {
-      next
-    }
-    
-    # Add response for this item
-    if (item %in% names(validation_data) && !is.na(validation_data[respondent_idx, item])) {
-      construct_sums[[item_construct]] <- construct_sums[[item_construct]] + 
-        validation_data[respondent_idx, item]
-    }
-    
-    construct_items_given[[item_construct]] <- construct_items_given[[item_construct]] + 1
-    total_items_given <- total_items_given + 1
-    
-    # Check if this construct can stop (respecting min_items_per_construct)
-    if (reduction_method != "none" && 
-        construct_items_given[[item_construct]] >= min_items_per_construct) {
-      
-      # Get boundary table for this construct
-      construct_boundary <- boundary_tables[[item_construct]]
-      within_construct_position <- construct_items_given[[item_construct]]
-      
-      if (within_construct_position <= nrow(construct_boundary)) {
-        boundary_row <- construct_boundary[within_construct_position, ]
-        current_sum <- construct_sums[[item_construct]]
-        
-        # Check stopping conditions for this construct
-        stopped <- FALSE
-        
-        # Check low risk boundary
-        if (boundary_row$low_risk_boundary != "N/A") {
-          boundary_val <- extract_boundary_value(boundary_row$low_risk_boundary, type = "low")
-          if (!is.na(boundary_val) && current_sum <= boundary_val) {
-            construct_classifications[[item_construct]] <- 0
-            construct_stopped[[item_construct]] <- TRUE
-            stopped <- TRUE
-          }
-        }
-        
-        # Check high risk boundary (if allowed)
-        if (!stopped && !stop_low_only && boundary_row$high_risk_boundary != "N/A") {
-          boundary_val <- extract_boundary_value(boundary_row$high_risk_boundary, type = "high")
-          if (!is.na(boundary_val) && current_sum >= boundary_val) {
-            construct_classifications[[item_construct]] <- 1
-            construct_stopped[[item_construct]] <- TRUE
-            stopped <- TRUE
-          }
-        }
-      }
-    }
-    
-    # Check if all constructs have stopped
-    if (all(unlist(construct_stopped))) {
-      break
-    }
-  }
+  logic_checks$early_stopping_present <- early_stop_count > 0
+  logic_checks$some_completed_all <- complete_count > 0
   
-  # Count how many constructs stopped early (before all their items were administered)
-  for (cn in names(prepared_data$config$constructs)) {
-    if (construct_stopped[[cn]] && 
-        construct_items_given[[cn]] < construct_items_total[[cn]]) {
-      num_constructs_stopped_early <- num_constructs_stopped_early + 1
-    }
-  }
+  # 2. Check that items used makes sense
+  logic_checks$items_used_valid <- all(simulation_results$n_items_used >= 1) && 
+    all(simulation_results$n_items_used <= nrow(admin_sequence))
   
-  # Determine the stop reason with CLEAR, UNAMBIGUOUS terminology
-  if (num_constructs_stopped_early == total_constructs) {
-    final_stop_reason <- "all_constructs_stopped_early"
-  } else if (num_constructs_stopped_early > 0) {
-    final_stop_reason <- "some_constructs_stopped_early"
-  } else {
-    final_stop_reason <- "no_constructs_stopped_early"
-  }
+  # 3. Check that classifications are binary
+  logic_checks$classifications_binary <- all(simulation_results$classifications %in% c(0, 1))
   
-  # Classify any constructs that didn't stop early
-  for (cn in names(prepared_data$config$constructs)) {
-    if (is.na(construct_classifications[[cn]])) {
-      cutoff <- prepared_data$config$cutoffs[[cn]]
-      construct_classifications[[cn]] <- ifelse(construct_sums[[cn]] >= cutoff, 1, 0)
-    }
-  }
-  
-  # Overall classification (could be customized based on questionnaire logic)
-  # For now, use majority vote or any positive
-  overall_classification <- ifelse(sum(unlist(construct_classifications)) > 0, 1, 0)
+  # Overall validation
+  logic_validation_passed <- all(unlist(logic_checks))
   
   return(list(
-    items_used = total_items_given,
-    stop_reason = final_stop_reason,
-    classification = overall_classification,
-    construct_classifications = construct_classifications,
-    construct_sums = construct_sums,
-    num_constructs_stopped_early = num_constructs_stopped_early
+    logic_validation_passed = logic_validation_passed,
+    logic_checks = logic_checks,
+    stop_reason_distribution = stop_reasons,
+    json_based = TRUE,
+    message = ifelse(logic_validation_passed, 
+                     "JSON-based continuation logic validation passed",
+                     "Issues detected in JSON-based continuation logic")
   ))
 }
+
+# ============================================================================
+# Keep existing functions that don't need changes
+# ============================================================================
+
+# These functions work with the simulation results regardless of how they were generated:
+# - calculate_deployment_performance [Y]
+# - compare_deployment_performance [Y]
+# - assess_deployment_fidelity [Y]
+# - analyze_boundary_utilization [Y]
+# - generate_validation_reports [Y]
+# - generate_validation_executive_summary [Y]
+# - generate_detailed_comparison_report [Y]
+# - generate_boundary_utilization_report [Y]
+# - generate_continuation_logic_report [Y]
+# - generate_deployment_recommendations [Y]
+# - generate_validation_visualizations [Y]
+# - assess_validation_success [Y]
+
+# [INSERT ALL THESE FUNCTIONS FROM YOUR ORIGINAL FILE HERE]
 
 #' Calculate Deployment Performance
 #'
@@ -983,139 +701,6 @@ assess_deployment_fidelity <- function(abs_diffs, pct_diffs) {
   ))
 }
 
-#' Validate Continuation Logic (ENHANCED)
-#'
-#' @param simulation_results Simulation results
-#' @param boundary_tables Boundary tables
-#' @param pattern_rules Pattern rules (if applicable)
-#' @param admin_sequence Administration sequence
-#' @param validation_data Validation data
-#' @param impl_params Implementation parameters
-#' @param prepared_data Prepared data
-#' @return Logic validation results
-validate_continuation_logic_simplified <- function(simulation_results, boundary_tables, 
-                                                   pattern_rules = NULL,
-                                                   admin_sequence, validation_data,
-                                                   impl_params, prepared_data) {
-  
-  # Validate that stopping reasons make sense
-  stop_reasons <- table(simulation_results$stop_reasons)
-  
-  # Check for logical consistency
-  logic_checks <- list()
-  
-  # 1. Check that reduction methods produce early stopping
-  reduction_method <- impl_params$method_combination$reduction
-  if (reduction_method != "none") {
-    # Count how many had some form of early stopping
-    if (simulation_results$pattern_based) {
-      # Pattern-based stopping
-      early_stop_count <- sum(
-        stop_reasons[grepl("pattern_matched", names(stop_reasons))]
-      )
-    } else {
-      # Sum-score based stopping
-      early_stop_count <- sum(
-        stop_reasons[grepl("all_constructs_stopped_early|some_constructs_stopped_early|stopped_early", 
-                           names(stop_reasons))]
-      )
-    }
-    early_stop_rate <- early_stop_count / sum(stop_reasons)
-    logic_checks$early_stopping_present <- early_stop_rate > 0
-  } else {
-    # For no reduction, all should have no early stopping
-    logic_checks$all_no_early_stop <- all(grepl("no_early_stopping|no_constructs_stopped_early", 
-                                                simulation_results$stop_reasons))
-  }
-  
-  # 2. Check that items used makes sense
-  logic_checks$items_used_valid <- all(simulation_results$n_items_used >= 1) && 
-    all(simulation_results$n_items_used <= length(admin_sequence$item_id))
-  
-  # 3. Check that classifications are binary
-  logic_checks$classifications_binary <- all(simulation_results$classifications %in% c(0, 1))
-  
-  # 4. Sample check a few respondents in detail
-  sample_size <- min(10, nrow(validation_data))
-  sample_indices <- sample(seq_len(nrow(validation_data)), sample_size)
-  
-  detailed_checks <- list()
-  for (idx in sample_indices) {
-    # Rerun simulation for this respondent to verify
-    if (prepared_data$config$questionnaire_type == "unidimensional") {
-      if (simulation_results$pattern_based && !is.null(pattern_rules)) {
-        rerun_result <- simulate_unidimensional_respondent_patterns(
-          respondent_idx = idx,
-          validation_data = validation_data,
-          pattern_rules = pattern_rules[["total"]],
-          ordered_items = admin_sequence$item_id,
-          reduction_method = reduction_method,
-          stop_low_only = prepared_data$config$constraints$stop_low_only %||% FALSE,
-          cutoff = prepared_data$config$cutoffs[["total"]]
-        )
-      } else {
-        rerun_result <- simulate_unidimensional_respondent(
-          respondent_idx = idx,
-          validation_data = validation_data,
-          boundary_table = boundary_tables[["total"]],
-          ordered_items = admin_sequence$item_id,
-          reduction_method = reduction_method,
-          stop_low_only = prepared_data$config$constraints$stop_low_only %||% FALSE,
-          cutoff = prepared_data$config$cutoffs[["total"]]
-        )
-      }
-    } else {
-      if (simulation_results$pattern_based && !is.null(pattern_rules)) {
-        rerun_result <- simulate_multicontruct_respondent_patterns(
-          respondent_idx = idx,
-          validation_data = validation_data,
-          pattern_rules = pattern_rules,
-          admin_sequence = admin_sequence,
-          prepared_data = prepared_data,
-          reduction_method = reduction_method,
-          stop_low_only = prepared_data$config$constraints$stop_low_only %||% FALSE,
-          min_items_per_construct = prepared_data$config$constraints$min_items_per_construct %||% 1
-        )
-      } else {
-        rerun_result <- simulate_multicontruct_respondent(
-          respondent_idx = idx,
-          validation_data = validation_data,
-          boundary_tables = boundary_tables,
-          admin_sequence = admin_sequence,
-          prepared_data = prepared_data,
-          reduction_method = reduction_method,
-          stop_low_only = prepared_data$config$constraints$stop_low_only %||% FALSE,
-          min_items_per_construct = prepared_data$config$constraints$min_items_per_construct %||% 1
-        )
-      }
-    }
-    
-    # Check consistency
-    detailed_checks[[paste0("respondent_", idx)]] <- list(
-      items_match = (rerun_result$items_used == simulation_results$n_items_used[idx]),
-      classification_match = (rerun_result$classification == simulation_results$classifications[idx]),
-      stop_reason_match = (rerun_result$stop_reason == simulation_results$stop_reasons[idx])
-    )
-  }
-  
-  # Check if all detailed checks passed
-  all_detailed_passed <- all(sapply(detailed_checks, function(x) all(unlist(x))))
-  
-  # Overall validation
-  logic_validation_passed <- all(unlist(logic_checks)) && all_detailed_passed
-  
-  return(list(
-    logic_validation_passed = logic_validation_passed,
-    logic_checks = logic_checks,
-    detailed_checks = detailed_checks,
-    stop_reason_distribution = stop_reasons,
-    pattern_based = simulation_results$pattern_based,
-    message = ifelse(logic_validation_passed, 
-                     "Continuation logic validation passed",
-                     "Issues detected in continuation logic")
-  ))
-}
-
 #' Analyze Boundary Utilization (ENHANCED)
 #'
 #' @param simulation_results Simulation results
@@ -1210,19 +795,6 @@ analyze_boundary_utilization <- function(simulation_results, boundary_tables,
   ))
 }
 
-# [Keep all report generation functions unchanged - they will work with enhanced data]
-# generate_validation_reports
-# generate_validation_executive_summary
-# generate_detailed_comparison_report
-# generate_boundary_utilization_report
-# generate_continuation_logic_report
-# generate_deployment_recommendations
-# generate_validation_visualizations
-# All plotting functions
-# assess_validation_success
-# quick_deployment_check
-# run_deployment_validation
-
 #' Generate Validation Reports
 #'
 #' @param deployment_performance Deployment performance
@@ -1281,9 +853,615 @@ generate_validation_reports <- function(deployment_performance, performance_comp
   }
 }
 
-# [Include all remaining unchanged functions here]
-# The rest of Module 8 functions remain the same as they already handle
-# the enhanced data structures appropriately
+#' Generate Validation Executive Summary (UPDATED - All Metrics)
+#'
+#' @param performance_comparison Performance comparison
+#' @param continuation_validation Continuation validation
+#' @param output_dir Output directory
+generate_validation_executive_summary <- function(performance_comparison, continuation_validation, 
+                                                  output_dir) {
+  
+  summary_file <- file.path(output_dir, "validation_executive_summary.txt")
+  
+  summary_text <- paste0(
+    "DEPLOYMENT VALIDATION EXECUTIVE SUMMARY\n",
+    "========================================\n\n",
+    "Generated: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n\n",
+    
+    "OVERALL STATUS\n",
+    "--------------\n"
+  )
+  
+  # Performance comparison status
+  if (performance_comparison$comparison_available) {
+    baseline_label <- ifelse(performance_comparison$comparison_type == "optimized", 
+                             "Optimized", "Original")
+    
+    summary_text <- paste0(summary_text,
+                           "Performance Fidelity: ", 
+                           performance_comparison$fidelity_assessment$overall_fidelity, "\n",
+                           "Comparison Type: ", baseline_label, " vs Deployed\n")
+  } else {
+    summary_text <- paste0(summary_text,
+                           "Performance Comparison: Not available (no baseline)\n")
+  }
+  
+  # Logic validation status
+  summary_text <- paste0(summary_text,
+                         "Continuation Logic: ",
+                         ifelse(continuation_validation$logic_validation_passed, "PASSED", "FAILED"), "\n\n")
+  
+  # Key metrics comparison - UPDATED to include all metrics
+  if (performance_comparison$comparison_available) {
+    baseline_label <- ifelse(performance_comparison$comparison_type == "optimized", 
+                             "Optimized", "Original")
+    
+    summary_text <- paste0(summary_text,
+                           "KEY METRICS COMPARISON\n",
+                           "---------------------\n",
+                           sprintf("%-20s  %10s  %10s  %10s\n", "Metric", baseline_label, "Deployed", "Difference"))
+    
+    # Include ALL key metrics
+    metrics_to_show <- c("sensitivity", "specificity", "fnr", "accuracy", 
+                         "balanced_accuracy", "mean_items_used", "reduction_pct")
+    
+    for (metric in metrics_to_show) {
+      if (!is.null(performance_comparison$absolute_differences[[metric]])) {
+        baseline_val <- performance_comparison$baseline_performance[[metric]]
+        deploy_val <- performance_comparison$deployment_performance[[metric]]
+        abs_diff <- performance_comparison$absolute_differences[[metric]]
+        
+        # Format based on metric type
+        if (metric == "mean_items_used") {
+          summary_text <- paste0(summary_text,
+                                 sprintf("%-20s  %10.1f  %10.1f  %+10.1f\n",
+                                         metric, baseline_val, deploy_val, abs_diff))
+        } else if (metric == "reduction_pct") {
+          summary_text <- paste0(summary_text,
+                                 sprintf("%-20s  %9.1f%%  %9.1f%%  %+9.1f%%\n",
+                                         metric, baseline_val, deploy_val, abs_diff))
+        } else {
+          summary_text <- paste0(summary_text,
+                                 sprintf("%-20s  %10.3f  %10.3f  %+10.3f\n",
+                                         metric, baseline_val, deploy_val, abs_diff))
+        }
+      }
+    }
+  }
+  
+  # Improvements section
+  if (length(performance_comparison$fidelity_assessment$improvements) > 0) {
+    summary_text <- paste0(summary_text,
+                           "\nPERFORMANCE IMPROVEMENTS\n",
+                           "------------------------\n")
+    for (improvement in performance_comparison$fidelity_assessment$improvements) {
+      summary_text <- paste0(summary_text, "✓ ", improvement, "\n")
+    }
+  }
+  
+  # Critical issues (only degradations)
+  if (length(performance_comparison$fidelity_assessment$critical_issues) > 0) {
+    summary_text <- paste0(summary_text,
+                           "\nCRITICAL ISSUES (Degradations)\n",
+                           "-------------------------------\n")
+    for (issue in performance_comparison$fidelity_assessment$critical_issues) {
+      summary_text <- paste0(summary_text, "✗ ", issue, "\n")
+    }
+  }
+  
+  # Warnings
+  if (length(performance_comparison$fidelity_assessment$warnings) > 0) {
+    summary_text <- paste0(summary_text,
+                           "\nWARNINGS\n",
+                           "--------\n")
+    for (warning in performance_comparison$fidelity_assessment$warnings) {
+      summary_text <- paste0(summary_text, "⚠ ", warning, "\n")
+    }
+  }
+  
+  writeLines(summary_text, summary_file)
+}
+
+#' Generate Detailed Comparison Report (FIXED - Uses Correct Terminology)
+#'
+#' @param performance_comparison Performance comparison
+#' @param output_dir Output directory
+generate_detailed_comparison_report <- function(performance_comparison, output_dir) {
+  
+  if (!performance_comparison$comparison_available) {
+    return(invisible(NULL))
+  }
+  
+  report_file <- file.path(output_dir, "detailed_performance_comparison.html")
+  
+  # Use appropriate terminology
+  baseline_label <- ifelse(performance_comparison$comparison_type == "optimized", 
+                           "Optimized", "Original")
+  
+  html_content <- paste0(
+    "<html><head><title>Performance Comparison Report</title>",
+    "<style>",
+    "body { font-family: Arial, sans-serif; margin: 20px; }",
+    "h1, h2 { color: #333; }",
+    "table { border-collapse: collapse; width: 80%; margin: 20px 0; }",
+    "th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }",
+    "th { background-color: #f2f2f2; font-weight: bold; }",
+    ".metric-value { text-align: right; }",
+    ".improvement { color: green; }",
+    ".degradation { color: red; }",
+    ".neutral { color: black; }",
+    "</style></head><body>",
+    "<h1>Detailed Performance Comparison</h1>",
+    "<p>Generated: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "</p>",
+    "<p><strong>Comparison Type:</strong> ", baseline_label, " vs Deployed</p>"
+  )
+  
+  # Fidelity status
+  fidelity_status <- performance_comparison$fidelity_assessment$overall_fidelity
+  status_color <- ifelse(fidelity_status == "PASS", "green", "red")
+  html_content <- paste0(html_content,
+                         "<h2>Overall Fidelity: <span style='color:", status_color, "'>",
+                         fidelity_status, "</span></h2>")
+  
+  # Add improvements section if any
+  if (length(performance_comparison$fidelity_assessment$improvements) > 0) {
+    html_content <- paste0(html_content,
+                           "<h2>Performance Improvements</h2>",
+                           "<ul style='color: green;'>")
+    for (improvement in performance_comparison$fidelity_assessment$improvements) {
+      html_content <- paste0(html_content, "<li>", improvement, "</li>")
+    }
+    html_content <- paste0(html_content, "</ul>")
+  }
+  
+  # Performance metrics table
+  html_content <- paste0(html_content,
+                         "<h2>Performance Metrics</h2>",
+                         "<table>",
+                         "<tr><th>Metric</th><th class='metric-value'>", baseline_label, "</th>",
+                         "<th class='metric-value'>Deployed</th>",
+                         "<th class='metric-value'>Abs. Diff</th>",
+                         "<th class='metric-value'>% Change</th>",
+                         "<th>Assessment</th></tr>")
+  
+  metrics_info <- list(
+    sensitivity = list(name = "Sensitivity", higher_better = TRUE),
+    specificity = list(name = "Specificity", higher_better = TRUE),
+    fnr = list(name = "False Negative Rate", higher_better = FALSE),
+    accuracy = list(name = "Accuracy", higher_better = TRUE),
+    balanced_accuracy = list(name = "Balanced Accuracy", higher_better = TRUE),
+    mean_items_used = list(name = "Mean Items Used", higher_better = FALSE),
+    reduction_pct = list(name = "Reduction %", higher_better = TRUE)
+  )
+  
+  for (metric in names(metrics_info)) {
+    info <- metrics_info[[metric]]
+    baseline <- performance_comparison$baseline_performance[[metric]]
+    deploy <- performance_comparison$deployment_performance[[metric]]
+    abs_diff <- performance_comparison$absolute_differences[[metric]]
+    pct_diff <- performance_comparison$percentage_differences[[metric]]
+    
+    if (!is.null(baseline) && !is.null(deploy)) {
+      # Determine if change is good, bad, or neutral
+      if (abs(abs_diff) < 0.001) {
+        change_class <- "neutral"
+        assessment <- "No change"
+      } else if ((info$higher_better && abs_diff > 0) || (!info$higher_better && abs_diff < 0)) {
+        change_class <- "improvement"
+        assessment <- "Improved"
+      } else {
+        change_class <- "degradation"
+        assessment <- "Degraded"
+      }
+      
+      pct_text <- ifelse(is.na(pct_diff), "N/A", sprintf("%+.1f%%", pct_diff))
+      
+      html_content <- paste0(html_content,
+                             "<tr>",
+                             "<td>", info$name, "</td>",
+                             "<td class='metric-value'>", sprintf("%.3f", baseline), "</td>",
+                             "<td class='metric-value'>", sprintf("%.3f", deploy), "</td>",
+                             "<td class='metric-value ", change_class, "'>", 
+                             sprintf("%+.3f", abs_diff), "</td>",
+                             "<td class='metric-value ", change_class, "'>", pct_text, "</td>",
+                             "<td>", assessment, "</td>",
+                             "</tr>")
+    }
+  }
+  
+  html_content <- paste0(html_content, "</table>")
+  
+  # Add critical issues if any
+  if (length(performance_comparison$fidelity_assessment$critical_issues) > 0) {
+    html_content <- paste0(html_content,
+                           "<h2>Critical Issues (Degradations)</h2>",
+                           "<ul style='color: red;'>")
+    for (issue in performance_comparison$fidelity_assessment$critical_issues) {
+      html_content <- paste0(html_content, "<li>", issue, "</li>")
+    }
+    html_content <- paste0(html_content, "</ul>")
+  }
+  
+  # Add warnings if any
+  if (length(performance_comparison$fidelity_assessment$warnings) > 0) {
+    html_content <- paste0(html_content,
+                           "<h2>Warnings</h2>",
+                           "<ul style='color: orange;'>")
+    for (warning in performance_comparison$fidelity_assessment$warnings) {
+      html_content <- paste0(html_content, "<li>", warning, "</li>")
+    }
+    html_content <- paste0(html_content, "</ul>")
+  }
+  
+  html_content <- paste0(html_content, "</body></html>")
+  
+  writeLines(html_content, report_file)
+}
+
+#' Generate Boundary Utilization Report (FIXED - Clear Terminology)
+#'
+#' @param boundary_analysis Boundary analysis results
+#' @param output_dir Output directory
+generate_boundary_utilization_report <- function(boundary_analysis, output_dir) {
+  
+  report_file <- file.path(output_dir, "boundary_utilization_report.txt")
+  
+  report_text <- paste0(
+    "BOUNDARY UTILIZATION REPORT\n",
+    "==========================\n\n",
+    "Total Respondents: ", boundary_analysis$utilization_summary$total_respondents, "\n\n",
+    "STOPPING REASON DISTRIBUTION:\n",
+    "-----------------------------\n",
+    "Clear categorization of early stopping patterns:\n",
+    "- all_constructs_stopped_early: ALL constructs reached stopping boundaries\n",
+    "- some_constructs_stopped_early: SOME (but not all) constructs reached stopping boundaries\n",
+    "- no_constructs_stopped_early: NO constructs stopped early (all items administered)\n\n"
+  )
+  
+  # Add stop reason statistics with clear formatting
+  for (reason in names(boundary_analysis$utilization_summary$stop_reason_counts)) {
+    count <- boundary_analysis$utilization_summary$stop_reason_counts[[reason]]
+    pct <- boundary_analysis$utilization_summary$stop_reason_percentages[[reason]]
+    
+    report_text <- paste0(report_text,
+                          sprintf("%-35s: %4d (%5.1f%%)\n", reason, count, pct))
+  }
+  
+  # Boundary coverage by construct
+  report_text <- paste0(report_text,
+                        "\nBOUNDARY COVERAGE BY CONSTRUCT:\n",
+                        "--------------------------------\n")
+  
+  for (cn in names(boundary_analysis$boundary_coverage)) {
+    cov <- boundary_analysis$boundary_coverage[[cn]]
+    report_text <- paste0(report_text,
+                          cn, ":\n",
+                          "  Low boundaries:  ", sprintf("%.1f%%", cov$low_boundary_coverage * 100), "\n",
+                          "  High boundaries: ", sprintf("%.1f%%", cov$high_boundary_coverage * 100), "\n")
+  }
+  
+  # Efficiency by stopping reason
+  report_text <- paste0(report_text,
+                        "\nEFFICIENCY BY STOPPING REASON:\n",
+                        "-------------------------------\n")
+  
+  for (reason in names(boundary_analysis$efficiency_by_reason)) {
+    eff <- boundary_analysis$efficiency_by_reason[[reason]]
+    
+    report_text <- paste0(report_text,
+                          reason, ":\n",
+                          "  Mean items:   ", sprintf("%.1f", eff$mean_items), "\n",
+                          "  Median items: ", sprintf("%.1f", eff$median_items), "\n",
+                          "  SD items:     ", sprintf("%.1f", eff$sd_items), "\n")
+  }
+  
+  # Add interpretation note
+  report_text <- paste0(report_text,
+                        "\nINTERPRETATION:\n",
+                        "--------------\n",
+                        "The mean items used shows the average assessment length for each category.\n",
+                        "Lower mean items indicates more efficient curtailment.\n",
+                        "- 'all_constructs_stopped_early' should have the lowest mean items\n",
+                        "- 'some_constructs_stopped_early' should have intermediate mean items\n",
+                        "- 'no_constructs_stopped_early' should have the highest mean items (all items)\n")
+  
+  writeLines(report_text, report_file)
+}
+
+#' Generate Continuation Logic Report
+#'
+#' @param continuation_validation Logic validation results
+#' @param output_dir Output directory
+generate_continuation_logic_report <- function(continuation_validation, output_dir) {
+  
+  report_file <- file.path(output_dir, "continuation_logic_report.txt")
+  
+  report_text <- paste0(
+    "CONTINUATION LOGIC VALIDATION REPORT\n",
+    "===================================\n\n",
+    "Overall Status: ", 
+    ifelse(continuation_validation$logic_validation_passed, "PASSED", "FAILED"), "\n\n"
+  )
+  
+  # Logic checks
+  report_text <- paste0(report_text,
+                        "LOGIC CHECKS:\n",
+                        "-------------\n")
+  
+  for (check_name in names(continuation_validation$logic_checks)) {
+    check_result <- continuation_validation$logic_checks[[check_name]]
+    status <- ifelse(check_result, "✓", "✗")
+    report_text <- paste0(report_text,
+                          sprintf("%-30s: %s\n", check_name, status))
+  }
+  
+  # Stop reason distribution
+  report_text <- paste0(report_text,
+                        "\nSTOP REASON DISTRIBUTION:\n",
+                        "------------------------\n")
+  
+  for (reason in names(continuation_validation$stop_reason_distribution)) {
+    count <- continuation_validation$stop_reason_distribution[[reason]]
+    report_text <- paste0(report_text,
+                          sprintf("%-25s: %d\n", reason, count))
+  }
+  
+  # Detailed check results
+  if (length(continuation_validation$detailed_checks) > 0) {
+    report_text <- paste0(report_text,
+                          "\nDETAILED SAMPLE CHECKS:\n",
+                          "-----------------------\n")
+    
+    all_passed <- TRUE
+    for (resp_id in names(continuation_validation$detailed_checks)) {
+      checks <- continuation_validation$detailed_checks[[resp_id]]
+      if (!all(unlist(checks))) {
+        all_passed <- FALSE
+        report_text <- paste0(report_text,
+                              resp_id, ": FAILED\n")
+        for (check in names(checks)) {
+          if (!checks[[check]]) {
+            report_text <- paste0(report_text,
+                                  "  - ", check, ": mismatch\n")
+          }
+        }
+      }
+    }
+    
+    if (all_passed) {
+      report_text <- paste0(report_text,
+                            "All sampled respondents passed consistency checks.\n")
+    }
+  }
+  
+  writeLines(report_text, report_file)
+}
+
+#' Generate Deployment Recommendations (FIXED - Recognizes Improvements)
+#'
+#' @param performance_comparison Performance comparison
+#' @param continuation_validation Continuation validation
+#' @param boundary_analysis Boundary analysis
+#' @param output_dir Output directory
+generate_deployment_recommendations <- function(performance_comparison, continuation_validation,
+                                                boundary_analysis, output_dir) {
+  
+  recommendations_file <- file.path(output_dir, "deployment_recommendations.txt")
+  
+  recommendations_text <- paste0(
+    "DEPLOYMENT RECOMMENDATIONS\n",
+    "==========================\n\n",
+    "Based on validation results:\n\n"
+  )
+  
+  # Determine overall recommendation
+  performance_ok <- !performance_comparison$comparison_available || 
+    performance_comparison$fidelity_assessment$overall_fidelity == "PASS"
+  logic_ok <- continuation_validation$logic_validation_passed
+  
+  # Check if we have improvements
+  has_improvements <- length(performance_comparison$fidelity_assessment$improvements) > 0
+  has_critical_issues <- length(performance_comparison$fidelity_assessment$critical_issues) > 0
+  
+  if (performance_ok && logic_ok) {
+    recommendations_text <- paste0(recommendations_text,
+                                   "✅ DEPLOYMENT RECOMMENDED\n\n")
+    
+    if (has_improvements) {
+      recommendations_text <- paste0(recommendations_text,
+                                     "Performance improvements detected:\n")
+      for (improvement in performance_comparison$fidelity_assessment$improvements) {
+        recommendations_text <- paste0(recommendations_text, "  ✓ ", improvement, "\n")
+      }
+      recommendations_text <- paste0(recommendations_text, "\n")
+    }
+    
+    recommendations_text <- paste0(recommendations_text,
+                                   "The deployment package has passed all validation checks.\n",
+                                   "Performance metrics are within acceptable tolerances.\n\n",
+                                   "Next steps:\n",
+                                   "1. Deploy in pilot environment\n",
+                                   "2. Monitor real-world performance\n",
+                                   "3. Collect feedback from users\n",
+                                   "4. Schedule periodic performance reviews\n")
+  } else {
+    # Check why it failed
+    failure_reasons <- character()
+    
+    if (has_critical_issues) {
+      failure_reasons <- c(failure_reasons, "Performance degradations exceed acceptable thresholds")
+    }
+    
+    if (!logic_ok) {
+      failure_reasons <- c(failure_reasons, "Continuation logic validation failed")
+    }
+    
+    recommendations_text <- paste0(recommendations_text,
+                                   "❌ DEPLOYMENT NOT RECOMMENDED\n\n",
+                                   "Reasons:\n")
+    
+    for (reason in failure_reasons) {
+      recommendations_text <- paste0(recommendations_text, "  • ", reason, "\n")
+    }
+    
+    recommendations_text <- paste0(recommendations_text,
+                                   "\nCritical issues must be resolved before deployment.\n",
+                                   "See detailed reports for specific remediation steps.\n")
+    
+    # If there were also improvements, mention them
+    if (has_improvements) {
+      recommendations_text <- paste0(recommendations_text,
+                                     "\nNote: Some performance improvements were also detected:\n")
+      for (improvement in performance_comparison$fidelity_assessment$improvements) {
+        recommendations_text <- paste0(recommendations_text, "  ✓ ", improvement, "\n")
+      }
+    }
+  }
+  
+  writeLines(recommendations_text, recommendations_file)
+}
+
+#' Generate Validation Visualizations
+#'
+#' @param deployment_performance Deployment performance
+#' @param performance_comparison Performance comparison
+#' @param boundary_analysis Boundary analysis
+#' @param simulation_results Simulation results
+#' @param output_dir Output directory
+generate_validation_visualizations <- function(deployment_performance, performance_comparison,
+                                               boundary_analysis, simulation_results, output_dir) {
+  
+  viz_dir <- file.path(output_dir, "visualizations")
+  if (!dir.exists(viz_dir)) {
+    dir.create(viz_dir, recursive = TRUE)
+  }
+  
+  # 1. Performance comparison radar chart (simplified as bar chart)
+  if (performance_comparison$comparison_available) {
+    comparison_plot <- create_performance_comparison_plot(performance_comparison)
+    ggplot2::ggsave(file.path(viz_dir, "performance_comparison.png"),
+                    comparison_plot, width = 10, height = 6)
+  }
+  
+  # 2. Item usage distribution
+  usage_plot <- create_item_usage_validation_plot(simulation_results)
+  ggplot2::ggsave(file.path(viz_dir, "item_usage_validation.png"),
+                  usage_plot, width = 10, height = 6)
+  
+  # 3. Stopping reason distribution
+  stop_reason_plot <- create_stop_reason_plot(boundary_analysis)
+  ggplot2::ggsave(file.path(viz_dir, "stop_reason_distribution.png"),
+                  stop_reason_plot, width = 10, height = 6)
+  
+  # 4. Boundary utilization heatmap (if multi-construct)
+  if (length(boundary_analysis$boundary_coverage) > 1) {
+    boundary_plot <- create_boundary_coverage_plot(boundary_analysis)
+    ggplot2::ggsave(file.path(viz_dir, "boundary_coverage.png"),
+                    boundary_plot, width = 12, height = 8)
+  }
+}
+
+#' Assess Overall Validation Success
+#'
+#' @param performance_comparison Performance comparison
+#' @param continuation_validation Continuation validation
+#' @return TRUE if validation passed, FALSE otherwise
+assess_validation_success <- function(performance_comparison, continuation_validation) {
+  
+  performance_ok <- TRUE
+  if (performance_comparison$comparison_available) {
+    performance_ok <- (performance_comparison$fidelity_assessment$overall_fidelity == "PASS")
+  }
+  
+  logic_ok <- continuation_validation$logic_validation_passed
+  
+  return(performance_ok && logic_ok)
+}
+
+#' Quick Deployment Check
+#'
+#' @param deployment_package Deployment package from Module 7
+#' @param prepared_data Prepared data from Module 1
+#' @param evaluation_results Evaluation results from Module 5 (optional)
+#' @param n_test_respondents Number of respondents to test (default: 50)
+#' @return Quick validation summary
+#' @export
+quick_deployment_check <- function(deployment_package, prepared_data, 
+                                   evaluation_results = NULL, n_test_respondents = 50) {
+  
+  cat("Running quick deployment validation check...\n")
+  
+  # Sample test data
+  test_data <- prepared_data$splits$test
+  if (nrow(test_data) > n_test_respondents) {
+    sample_indices <- sample(seq_len(nrow(test_data)), n_test_respondents)
+    test_data <- test_data[sample_indices, ]
+  }
+  
+  # Quick simulation
+  quick_results <- simulate_deployed_questionnaire(
+    boundary_tables = deployment_package$boundary_tables,
+    admin_sequence = deployment_package$admin_sequence,
+    validation_data = test_data,
+    impl_params = deployment_package$implementation_params,
+    prepared_data = prepared_data
+  )
+  
+  # Quick performance calculation
+  quick_performance <- calculate_deployment_performance(
+    simulation_results = quick_results,
+    validation_data = test_data,
+    prepared_data = prepared_data,
+    impl_params = deployment_package$implementation_params
+  )
+  
+  # Summary output
+  cat("\nQuick Validation Results:\n")
+  cat("------------------------\n")
+  cat("Respondents tested:", nrow(test_data), "\n")
+  cat("Mean items used:", sprintf("%.1f", quick_performance$mean_items_used), "\n")
+  cat("Reduction achieved:", sprintf("%.1f%%", quick_performance$reduction_pct), "\n")
+  cat("FNR:", sprintf("%.3f", quick_performance$fnr), "\n")
+  cat("Accuracy:", sprintf("%.3f", quick_performance$accuracy), "\n")
+  
+  # Early stopping utilization
+  early_stops <- sum(!grepl("completed_all", quick_results$stop_reasons))
+  early_stop_rate <- early_stops / length(quick_results$stop_reasons) * 100
+  cat("Early stopping rate:", sprintf("%.1f%%", early_stop_rate), "\n")
+  
+  # Compare with evaluation if available
+  if (!is.null(evaluation_results)) {
+    orig_perf <- evaluation_results$full_performance
+    fnr_diff <- quick_performance$fnr - orig_perf$fnr
+    acc_diff <- quick_performance$accuracy - orig_perf$accuracy
+    
+    cat("\nComparison with evaluation:\n")
+    cat("FNR difference:", sprintf("%+.3f", fnr_diff), "\n")
+    cat("Accuracy difference:", sprintf("%+.3f", acc_diff), "\n")
+    
+    if (abs(fnr_diff) < 0.02 && abs(acc_diff) < 0.02) {
+      cat("✅ Performance matches evaluation within tolerance\n")
+    } else {
+      cat("⚠️  Performance differs from evaluation - full validation recommended\n")
+    }
+  }
+  
+  return(list(
+    performance = quick_performance,
+    early_stop_rate = early_stop_rate,
+    validation_summary = "quick_check_completed"
+  ))
+}
+
+# ============================================================================
+# DEPRECATED: Old Pattern-Based Simulation Functions
+# ============================================================================
+# These are no longer used but kept for reference
+
+# simulate_unidimensional_respondent_patterns <- function(...) { }
+# simulate_multicontruct_respondent_patterns <- function(...) { }
+# simulate_unidimensional_respondent <- function(...) { }
+# simulate_multicontruct_respondent <- function(...) { }
 
 # ============================================================================
 # Helper Functions
