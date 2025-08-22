@@ -1657,27 +1657,201 @@ generate_unidimensional_pages_patterns <- function(admin_sequence, pattern_rules
   return(pages)
 }
 
-#' Generate Pages for Multi-construct with Pattern Rules (NEW FUNCTION)
+#' #' Generate Pages for Multi-construct with Pattern Rules (NEW FUNCTION)
+#' #'
+#' #' @param admin_sequence Administration sequence
+#' #' @param pattern_rules Pattern rules by construct
+#' #' @param item_definitions Item definitions
+#' #' @param survey_config Survey configuration
+#' #' @param data_config Data configuration
+#' #' @param method_results Method results
+#' #' @param reduction_method Reduction method
+#' #' @param stop_low_only Stop low only flag
+#' #' @return List of pages
+#' generate_multi_construct_pages_patterns <- function(admin_sequence, pattern_rules,
+#'                                                     item_definitions, survey_config,
+#'                                                     data_config, method_results,
+#'                                                     reduction_method, stop_low_only) {
+#'   pages <- list()
+#'   
+#'   # Track which items from each construct have been presented
+#'   construct_item_counts <- list()
+#'   for (cn in names(data_config$constructs)) {
+#'     construct_item_counts[[cn]] <- 0
+#'   }
+#'   
+#'   # Get min_items_per_construct
+#'   min_items_per_construct <- method_results$reduction_result$constraints_applied$min_items_per_construct %||% 
+#'     data_config$constraints$min_items_per_construct %||% 
+#'     0
+#'   
+#'   for (i in 1:nrow(admin_sequence)) {
+#'     item_id <- admin_sequence$item_id[i]
+#'     original_pos <- admin_sequence$original_position[i]
+#'     item_construct <- admin_sequence$construct[i]
+#'     
+#'     # Update construct item count
+#'     construct_item_counts[[item_construct]] <- construct_item_counts[[item_construct]] + 1
+#'     within_construct_pos <- construct_item_counts[[item_construct]]
+#'     
+#'     # Create page
+#'     page <- list(
+#'       name = as.character(original_pos),
+#'       elements = list()
+#'     )
+#'     
+#'     # Initialize question
+#'     question <- list()
+#'     question$type <- "rating"
+#'     question$name <- item_id
+#'     
+#'     # Generate pattern-based visibility condition
+#'     visibility_condition <- NULL
+#'     
+#'     if (within_construct_pos > 1 && reduction_method == "sc_ep" && 
+#'         !is.null(pattern_rules[[item_construct]])) {
+#'       # Get previous items FROM THE SAME CONSTRUCT
+#'       prev_construct_items <- admin_sequence$item_id[
+#'         admin_sequence$construct == item_construct &
+#'           1:nrow(admin_sequence) < i
+#'       ]
+#'       
+#'       # Get pattern rules for this construct at this position
+#'       construct_pattern_rules <- pattern_rules[[item_construct]]
+#'       
+#'       if (length(prev_construct_items) > 0 && 
+#'           length(prev_construct_items) <= length(construct_pattern_rules)) {
+#'         visibility_condition <- generate_pattern_visibility_condition(
+#'           prev_items = prev_construct_items,
+#'           pattern_rules = construct_pattern_rules[[length(prev_construct_items)]],
+#'           stop_low_only = stop_low_only
+#'         )
+#'       }
+#'     }
+#'     
+#'     # Add visibleIf if condition exists (but not for unconditionally required items)
+#'     if (i == 1 || (min_items_per_construct > 0 && within_construct_pos <= min_items_per_construct)) {
+#'       # No visibleIf for unconditionally required items
+#'     } else if (!is.null(visibility_condition)) {
+#'       question$visibleIf <- visibility_condition
+#'     }
+#'     
+#'     # Rest of question setup
+#'     question$title <- item_definitions[[item_id]]$item_text
+#'     
+#'     if (!is.null(question$visibleIf)) {
+#'       question$requiredIf <- question$visibleIf
+#'     }
+#'     
+#'     if (i == 1 || (min_items_per_construct > 0 && 
+#'                    within_construct_pos <= min_items_per_construct)) {
+#'       question$isRequired <- TRUE
+#'     }
+#'     
+#'     question$autoGenerate <- survey_config$autoGenerate %||% FALSE
+#'     question$rateValues <- item_definitions[[item_id]]$rateValues
+#'     question$displayMode <- survey_config$displayMode %||% "buttons"
+#'     
+#'     page$elements[[1]] <- question
+#'     pages[[i]] <- page
+#'   }
+#'   
+#'   return(pages)
+#' }
+
+#' Generate Cumulative Pattern Visibility Condition
 #'
-#' @param admin_sequence Administration sequence
-#' @param pattern_rules Pattern rules by construct
-#' @param item_definitions Item definitions
-#' @param survey_config Survey configuration
-#' @param data_config Data configuration
-#' @param method_results Method results
-#' @param reduction_method Reduction method
-#' @param stop_low_only Stop low only flag
-#' @return List of pages
+#' Creates a visibility condition that checks ALL previous positions haven't stopped
+#'
+#' @param construct_items_so_far All items from this construct seen so far
+#' @param pattern_rules Pattern rules for this construct
+#' @param stop_low_only Whether only low-risk stopping is allowed
+#' @return SurveyJS visibility condition string
+generate_cumulative_pattern_visibility <- function(construct_items_so_far, 
+                                                   pattern_rules, 
+                                                   stop_low_only = FALSE) {
+  
+  if (length(construct_items_so_far) == 0 || is.null(pattern_rules)) {
+    return(NULL)
+  }
+  
+  # Build conditions for each position that could have stopped
+  all_continue_conditions <- character()
+  
+  # Check each previous position
+  for (k in 1:length(construct_items_so_far)) {
+    if (k > length(pattern_rules)) next
+    
+    pos_rules <- pattern_rules[[k]]
+    if (is.null(pos_rules)) next
+    
+    items_at_k <- construct_items_so_far[1:k]
+    stop_conditions_at_k <- character()
+    
+    # Collect all patterns that would stop at position k
+    # Low-risk patterns
+    if (!is.null(pos_rules$low_risk_patterns)) {
+      for (pattern_name in names(pos_rules$low_risk_patterns)) {
+        pattern_info <- pos_rules$low_risk_patterns[[pattern_name]]
+        scores <- pattern_info$scores
+        
+        if (length(scores) == k) {
+          # Build condition for this pattern
+          checks <- character()
+          for (j in 1:k) {
+            checks <- c(checks, paste0("{", items_at_k[j], "} == ", scores[j]))
+          }
+          pattern_cond <- paste0("(", paste(checks, collapse = " and "), ")")
+          stop_conditions_at_k <- c(stop_conditions_at_k, pattern_cond)
+        }
+      }
+    }
+    
+    # High-risk patterns (if allowed)
+    if (!stop_low_only && !is.null(pos_rules$high_risk_patterns)) {
+      for (pattern_name in names(pos_rules$high_risk_patterns)) {
+        pattern_info <- pos_rules$high_risk_patterns[[pattern_name]]
+        scores <- pattern_info$scores
+        
+        if (length(scores) == k) {
+          checks <- character()
+          for (j in 1:k) {
+            checks <- c(checks, paste0("{", items_at_k[j], "} == ", scores[j]))
+          }
+          pattern_cond <- paste0("(", paste(checks, collapse = " and "), ")")
+          stop_conditions_at_k <- c(stop_conditions_at_k, pattern_cond)
+        }
+      }
+    }
+    
+    # Create NOT condition for this position
+    if (length(stop_conditions_at_k) > 0) {
+      not_stopped_at_k <- paste0("!(", paste(stop_conditions_at_k, collapse = " or "), ")")
+      all_continue_conditions <- c(all_continue_conditions, not_stopped_at_k)
+    }
+  }
+  
+  # Combine all conditions with AND
+  if (length(all_continue_conditions) > 0) {
+    return(paste(all_continue_conditions, collapse = " and "))
+  }
+  
+  return(NULL)
+}
+
+#' Replace the generate_multi_construct_pages_patterns function in Module 7
+#' 
+#' This is the corrected version with proper cumulative visibility
 generate_multi_construct_pages_patterns <- function(admin_sequence, pattern_rules,
-                                                    item_definitions, survey_config,
-                                                    data_config, method_results,
-                                                    reduction_method, stop_low_only) {
+                                                              item_definitions, survey_config,
+                                                              data_config, method_results,
+                                                              reduction_method, stop_low_only) {
   pages <- list()
   
-  # Track which items from each construct have been presented
-  construct_item_counts <- list()
+  # Track items by construct
+  construct_items_seen <- list()
   for (cn in names(data_config$constructs)) {
-    construct_item_counts[[cn]] <- 0
+    construct_items_seen[[cn]] <- character()
   }
   
   # Get min_items_per_construct
@@ -1690,9 +1864,9 @@ generate_multi_construct_pages_patterns <- function(admin_sequence, pattern_rule
     original_pos <- admin_sequence$original_position[i]
     item_construct <- admin_sequence$construct[i]
     
-    # Update construct item count
-    construct_item_counts[[item_construct]] <- construct_item_counts[[item_construct]] + 1
-    within_construct_pos <- construct_item_counts[[item_construct]]
+    # Track this item for its construct
+    construct_items_seen[[item_construct]] <- c(construct_items_seen[[item_construct]], item_id)
+    within_construct_pos <- length(construct_items_seen[[item_construct]])
     
     # Create page
     page <- list(
@@ -1705,49 +1879,37 @@ generate_multi_construct_pages_patterns <- function(admin_sequence, pattern_rule
     question$type <- "rating"
     question$name <- item_id
     
-    # Generate pattern-based visibility condition
+    # Generate CUMULATIVE visibility condition
     visibility_condition <- NULL
     
-    if (within_construct_pos > 1 && reduction_method == "sc_ep" && 
+    # Only add visibility conditions after minimum items and for non-first items
+    if (within_construct_pos > 1 && 
+        within_construct_pos > min_items_per_construct &&
+        reduction_method == "sc_ep" && 
         !is.null(pattern_rules[[item_construct]])) {
-      # Get previous items FROM THE SAME CONSTRUCT
-      prev_construct_items <- admin_sequence$item_id[
-        admin_sequence$construct == item_construct &
-          1:nrow(admin_sequence) < i
-      ]
       
-      # Get pattern rules for this construct at this position
-      construct_pattern_rules <- pattern_rules[[item_construct]]
+      # Get all PREVIOUS items from this construct (not including current)
+      prev_construct_items <- construct_items_seen[[item_construct]][1:(within_construct_pos-1)]
       
-      if (length(prev_construct_items) > 0 && 
-          length(prev_construct_items) <= length(construct_pattern_rules)) {
-        visibility_condition <- generate_pattern_visibility_condition(
-          prev_items = prev_construct_items,
-          pattern_rules = construct_pattern_rules[[length(prev_construct_items)]],
-          stop_low_only = stop_low_only
-        )
-      }
+      # Generate cumulative condition
+      visibility_condition <- generate_cumulative_pattern_visibility(
+        construct_items_so_far = prev_construct_items,
+        pattern_rules = pattern_rules[[item_construct]],
+        stop_low_only = stop_low_only
+      )
     }
     
-    # Add visibleIf if condition exists (but not for unconditionally required items)
-    if (i == 1 || (min_items_per_construct > 0 && within_construct_pos <= min_items_per_construct)) {
-      # No visibleIf for unconditionally required items
-    } else if (!is.null(visibility_condition)) {
+    # Add visibleIf only if we have a condition and item is not mandatory
+    if (!is.null(visibility_condition)) {
       question$visibleIf <- visibility_condition
+      question$requiredIf <- visibility_condition
+    } else if (i == 1 || (min_items_per_construct > 0 && within_construct_pos <= min_items_per_construct)) {
+      # Mandatory items are always required
+      question$isRequired <- TRUE
     }
     
     # Rest of question setup
     question$title <- item_definitions[[item_id]]$item_text
-    
-    if (!is.null(question$visibleIf)) {
-      question$requiredIf <- question$visibleIf
-    }
-    
-    if (i == 1 || (min_items_per_construct > 0 && 
-                   within_construct_pos <= min_items_per_construct)) {
-      question$isRequired <- TRUE
-    }
-    
     question$autoGenerate <- survey_config$autoGenerate %||% FALSE
     question$rateValues <- item_definitions[[item_id]]$rateValues
     question$displayMode <- survey_config$displayMode %||% "buttons"
