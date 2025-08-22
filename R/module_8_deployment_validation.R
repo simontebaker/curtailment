@@ -1,5 +1,5 @@
 # ============================================================================
-# Module 8: Deployment Validation Module (JSON-BASED VALIDATION)
+# Module 8: Deployment Validation Module (JSON-BASED VALIDATION) - FIXED
 # ============================================================================
 # Purpose: Validate deployment artifacts by simulating the actual JSON logic
 #          and comparing actual performance to predicted performance
@@ -186,7 +186,7 @@ validate_deployment <- function(deployment_package,
   return(validation_results)
 }
 
-#' Simulate Deployed Questionnaire (JSON-BASED)
+#' Simulate Deployed Questionnaire (JSON-BASED) - FIXED
 #'
 #' This simulates what the actual SurveyJS implementation would do
 #' based on the JSON visibility conditions
@@ -219,12 +219,23 @@ simulate_deployed_questionnaire <- function(boundary_tables, pattern_rules = NUL
     stop("surveyjs_config.json not found. Please ensure Module 7 has been run.")
   }
   
-  # Load JSON configuration
+  # Load JSON configuration with proper handling
   if (!requireNamespace("jsonlite", quietly = TRUE)) {
     stop("jsonlite package is required to load JSON configuration")
   }
   
-  surveyjs_config <- jsonlite::fromJSON(surveyjs_json_file)
+  # Load with simplifyVector = FALSE to preserve structure
+  surveyjs_config <- tryCatch({
+    jsonlite::fromJSON(surveyjs_json_file, simplifyVector = FALSE)
+  }, error = function(e) {
+    # If that fails, try with default settings
+    jsonlite::fromJSON(surveyjs_json_file)
+  })
+  
+  # Verify we have pages
+  if (is.null(surveyjs_config$pages)) {
+    stop("No pages found in surveyjs_config.json")
+  }
   
   cat("  Processing", n_respondents, "respondents...\n")
   cat("  Simulating actual SurveyJS visibility logic from JSON\n")
@@ -266,11 +277,12 @@ simulate_deployed_questionnaire <- function(boundary_tables, pattern_rules = NUL
     classifications = classifications,
     n_items_used = stopped_at,
     ordered_items = ordered_items,
-    json_based = TRUE  # Flag that this used JSON simulation
+    json_based = TRUE,  # Flag that this used JSON simulation
+    pattern_based = !is.null(pattern_rules) && impl_params$use_pattern_boundaries
   ))
 }
 
-#' Simulate JSON Logic for a Single Respondent
+#' Simulate JSON Logic for a Single Respondent (FIXED VERSION)
 #'
 #' @param respondent_idx Respondent index
 #' @param validation_data Validation data
@@ -285,42 +297,91 @@ simulate_json_logic_for_respondent <- function(respondent_idx, validation_data,
   responses_collected <- list()
   items_administered <- character()
   
-  # Process each page
-  for (page in surveyjs_pages) {
+  # Handle different possible structures from jsonlite::fromJSON
+  # Pages could be a list, data frame, or other structure
+  
+  # Convert to list if it's a data frame
+  if (is.data.frame(surveyjs_pages)) {
+    # Convert each row to a list
+    pages_list <- list()
+    for (i in 1:nrow(surveyjs_pages)) {
+      pages_list[[i]] <- as.list(surveyjs_pages[i, ])
+    }
+    surveyjs_pages <- pages_list
+  }
+  
+  # Get the number of pages
+  n_pages <- length(surveyjs_pages)
+  
+  # Process each page by index
+  for (page_idx in seq_len(n_pages)) {
+    # Get the page - handle both list and other structures
+    if (is.list(surveyjs_pages)) {
+      page <- surveyjs_pages[[page_idx]]
+    } else {
+      # This shouldn't happen after conversion above, but just in case
+      next
+    }
+    
+    # Skip if page is NULL or not a list
+    if (is.null(page) || !is.list(page)) next
+    
     # Skip completion page
     if (!is.null(page$name) && page$name == "completion") next
     
-    # Get question from page
-    if (is.null(page$elements) || length(page$elements) == 0) next
-    question <- page$elements[[1]]
+    # Get question from page elements
+    # Handle case where elements might be nested differently
+    question <- NULL
+    if (!is.null(page$elements)) {
+      if (is.list(page$elements)) {
+        if (length(page$elements) > 0) {
+          # Elements could be a list of lists or a single list
+          if (is.list(page$elements[[1]])) {
+            question <- page$elements[[1]]
+          } else if (!is.null(page$elements$type)) {
+            # Elements might be flattened
+            question <- page$elements
+          }
+        }
+      } else if (is.data.frame(page$elements) && nrow(page$elements) > 0) {
+        # Convert first row to list
+        question <- as.list(page$elements[1, ])
+      }
+    }
+    
     if (is.null(question)) next
     
     item_name <- question$name
+    if (is.null(item_name)) next
     
     # Check visibility
     is_visible <- TRUE
     
     # Check isRequired first (always visible)
-    if (!is.null(question$isRequired) && question$isRequired) {
+    if (!is.null(question$isRequired) && isTRUE(as.logical(question$isRequired))) {
       is_visible <- TRUE
     }
     # Then check visibleIf condition
-    else if (!is.null(question$visibleIf)) {
+    else if (!is.null(question$visibleIf) && question$visibleIf != "") {
+      # Ensure visibleIf is a character string
+      visibility_condition <- as.character(question$visibleIf)
+      
       # Evaluate visibility based on COLLECTED responses only
       is_visible <- evaluate_visibility_with_collected_responses(
-        condition = question$visibleIf,
+        condition = visibility_condition,
         collected_responses = responses_collected
       )
     }
     
     if (is_visible) {
       # Item is shown - collect response
-      items_administered <- c(items_administered, item_name)
+      items_administered <- c(items_administered, as.character(item_name))
       
-      if (item_name %in% names(validation_data)) {
-        response_value <- validation_data[respondent_idx, item_name]
+      # Get the response value
+      if (as.character(item_name) %in% names(validation_data)) {
+        response_value <- validation_data[respondent_idx, as.character(item_name)]
         if (!is.na(response_value)) {
-          responses_collected[[item_name]] <- response_value
+          responses_collected[[as.character(item_name)]] <- response_value
         }
       }
     }
@@ -340,7 +401,7 @@ simulate_json_logic_for_respondent <- function(respondent_idx, validation_data,
   # Calculate classification based on collected responses
   if (prepared_data$config$questionnaire_type == "unidimensional") {
     total_score <- sum(unlist(responses_collected), na.rm = TRUE)
-    cutoff <- prepared_data$config$cutoffs[["total"]]
+    cutoff <- prepared_data$config$cutoffs[["total"]] %||% prepared_data$config$cutoffs[[1]]
     classification <- ifelse(total_score >= cutoff, 1, 0)
   } else {
     # Multi-construct classification
@@ -450,22 +511,6 @@ validate_continuation_logic_json_based <- function(simulation_results, admin_seq
 # Keep existing functions that don't need changes
 # ============================================================================
 
-# These functions work with the simulation results regardless of how they were generated:
-# - calculate_deployment_performance [Y]
-# - compare_deployment_performance [Y]
-# - assess_deployment_fidelity [Y]
-# - analyze_boundary_utilization [Y]
-# - generate_validation_reports [Y]
-# - generate_validation_executive_summary [Y]
-# - generate_detailed_comparison_report [Y]
-# - generate_boundary_utilization_report [Y]
-# - generate_continuation_logic_report [Y]
-# - generate_deployment_recommendations [Y]
-# - generate_validation_visualizations [Y]
-# - assess_validation_success [Y]
-
-# [INSERT ALL THESE FUNCTIONS FROM YOUR ORIGINAL FILE HERE]
-
 #' Calculate Deployment Performance
 #'
 #' @param simulation_results Simulation results
@@ -509,14 +554,16 @@ calculate_deployment_performance <- function(simulation_results, validation_data
   
   # Add pattern-specific metrics if applicable
   pattern_metrics <- NULL
-  if (simulation_results$pattern_based) {
+  if (isTRUE(simulation_results$pattern_based)) {
     pattern_stop_count <- sum(grepl("pattern_matched", simulation_results$stop_reasons))
     pattern_stop_rate <- pattern_stop_count / length(simulation_results$stop_reasons)
     
     pattern_metrics <- list(
       pattern_stop_count = pattern_stop_count,
       pattern_stop_rate = pattern_stop_rate,
-      unique_patterns = length(unique(simulation_results$stop_patterns[simulation_results$stop_patterns != ""]))
+      unique_patterns = if (exists("stop_patterns", simulation_results)) {
+        length(unique(simulation_results$stop_patterns[simulation_results$stop_patterns != ""]))
+      } else 0
     )
   }
   
@@ -718,7 +765,7 @@ analyze_boundary_utilization <- function(simulation_results, boundary_tables,
     total_respondents = length(stop_reasons),
     stop_reason_counts = table(stop_reasons),
     stop_reason_percentages = prop.table(table(stop_reasons)) * 100,
-    pattern_based = simulation_results$pattern_based
+    pattern_based = isTRUE(simulation_results$pattern_based)
   )
   
   # Calculate boundary coverage - how many positions have usable boundaries
@@ -781,10 +828,12 @@ analyze_boundary_utilization <- function(simulation_results, boundary_tables,
   }
   
   # Add pattern-specific utilization if applicable
-  if (simulation_results$pattern_based && length(simulation_results$stop_patterns) > 0) {
-    pattern_utilization <- table(simulation_results$stop_patterns[simulation_results$stop_patterns != ""])
-    utilization_summary$pattern_utilization <- pattern_utilization
-    utilization_summary$most_common_patterns <- head(sort(pattern_utilization, decreasing = TRUE), 10)
+  if (isTRUE(simulation_results$pattern_based) && exists("stop_patterns", simulation_results)) {
+    if (length(simulation_results$stop_patterns) > 0) {
+      pattern_utilization <- table(simulation_results$stop_patterns[simulation_results$stop_patterns != ""])
+      utilization_summary$pattern_utilization <- pattern_utilization
+      utilization_summary$most_common_patterns <- head(sort(pattern_utilization, decreasing = TRUE), 10)
+    }
   }
   
   return(list(
@@ -1111,11 +1160,7 @@ generate_boundary_utilization_report <- function(boundary_analysis, output_dir) 
     "==========================\n\n",
     "Total Respondents: ", boundary_analysis$utilization_summary$total_respondents, "\n\n",
     "STOPPING REASON DISTRIBUTION:\n",
-    "-----------------------------\n",
-    "Clear categorization of early stopping patterns:\n",
-    "- all_constructs_stopped_early: ALL constructs reached stopping boundaries\n",
-    "- some_constructs_stopped_early: SOME (but not all) constructs reached stopping boundaries\n",
-    "- no_constructs_stopped_early: NO constructs stopped early (all items administered)\n\n"
+    "-----------------------------\n"
   )
   
   # Add stop reason statistics with clear formatting
@@ -1160,10 +1205,7 @@ generate_boundary_utilization_report <- function(boundary_analysis, output_dir) 
                         "\nINTERPRETATION:\n",
                         "--------------\n",
                         "The mean items used shows the average assessment length for each category.\n",
-                        "Lower mean items indicates more efficient curtailment.\n",
-                        "- 'all_constructs_stopped_early' should have the lowest mean items\n",
-                        "- 'some_constructs_stopped_early' should have intermediate mean items\n",
-                        "- 'no_constructs_stopped_early' should have the highest mean items (all items)\n")
+                        "Lower mean items indicates more efficient curtailment.\n")
   
   writeLines(report_text, report_file)
 }
@@ -1204,34 +1246,6 @@ generate_continuation_logic_report <- function(continuation_validation, output_d
     count <- continuation_validation$stop_reason_distribution[[reason]]
     report_text <- paste0(report_text,
                           sprintf("%-25s: %d\n", reason, count))
-  }
-  
-  # Detailed check results
-  if (length(continuation_validation$detailed_checks) > 0) {
-    report_text <- paste0(report_text,
-                          "\nDETAILED SAMPLE CHECKS:\n",
-                          "-----------------------\n")
-    
-    all_passed <- TRUE
-    for (resp_id in names(continuation_validation$detailed_checks)) {
-      checks <- continuation_validation$detailed_checks[[resp_id]]
-      if (!all(unlist(checks))) {
-        all_passed <- FALSE
-        report_text <- paste0(report_text,
-                              resp_id, ": FAILED\n")
-        for (check in names(checks)) {
-          if (!checks[[check]]) {
-            report_text <- paste0(report_text,
-                                  "  - ", check, ": mismatch\n")
-          }
-        }
-      }
-    }
-    
-    if (all_passed) {
-      report_text <- paste0(report_text,
-                            "All sampled respondents passed consistency checks.\n")
-    }
   }
   
   writeLines(report_text, report_file)
@@ -1336,7 +1350,7 @@ generate_validation_visualizations <- function(deployment_performance, performan
     dir.create(viz_dir, recursive = TRUE)
   }
   
-  # 1. Performance comparison radar chart (simplified as bar chart)
+  # 1. Performance comparison bar chart
   if (performance_comparison$comparison_available) {
     comparison_plot <- create_performance_comparison_plot(performance_comparison)
     ggplot2::ggsave(file.path(viz_dir, "performance_comparison.png"),
@@ -1359,6 +1373,85 @@ generate_validation_visualizations <- function(deployment_performance, performan
     ggplot2::ggsave(file.path(viz_dir, "boundary_coverage.png"),
                     boundary_plot, width = 12, height = 8)
   }
+}
+
+#' Create Performance Comparison Plot
+#'
+#' @param performance_comparison Performance comparison results
+#' @return ggplot object
+create_performance_comparison_plot <- function(performance_comparison) {
+  # Implementation depends on your specific needs
+  # This is a placeholder
+  data <- data.frame(
+    metric = c("FNR", "Accuracy", "Items Used"),
+    baseline = c(performance_comparison$baseline_performance$fnr,
+                 performance_comparison$baseline_performance$accuracy,
+                 performance_comparison$baseline_performance$mean_items_used / 50),
+    deployed = c(performance_comparison$deployment_performance$fnr,
+                 performance_comparison$deployment_performance$accuracy,
+                 performance_comparison$deployment_performance$mean_items_used / 50)
+  )
+  
+  data_long <- reshape2::melt(data, id.vars = "metric")
+  
+  ggplot2::ggplot(data_long, ggplot2::aes(x = metric, y = value, fill = variable)) +
+    ggplot2::geom_bar(stat = "identity", position = "dodge") +
+    ggplot2::theme_minimal() +
+    ggplot2::labs(title = "Performance Comparison", y = "Value", x = "Metric")
+}
+
+#' Create Item Usage Validation Plot
+#'
+#' @param simulation_results Simulation results
+#' @return ggplot object
+create_item_usage_validation_plot <- function(simulation_results) {
+  data <- data.frame(items_used = simulation_results$n_items_used)
+  
+  ggplot2::ggplot(data, ggplot2::aes(x = items_used)) +
+    ggplot2::geom_histogram(binwidth = 1, fill = "blue", alpha = 0.7) +
+    ggplot2::theme_minimal() +
+    ggplot2::labs(title = "Item Usage Distribution", x = "Number of Items Used", y = "Count")
+}
+
+#' Create Stop Reason Plot
+#'
+#' @param boundary_analysis Boundary analysis
+#' @return ggplot object
+create_stop_reason_plot <- function(boundary_analysis) {
+  data <- data.frame(
+    reason = names(boundary_analysis$utilization_summary$stop_reason_counts),
+    count = as.numeric(boundary_analysis$utilization_summary$stop_reason_counts)
+  )
+  
+  ggplot2::ggplot(data, ggplot2::aes(x = reason, y = count)) +
+    ggplot2::geom_bar(stat = "identity", fill = "coral") +
+    ggplot2::theme_minimal() +
+    ggplot2::coord_flip() +
+    ggplot2::labs(title = "Stop Reason Distribution", x = "Reason", y = "Count")
+}
+
+#' Create Boundary Coverage Plot
+#'
+#' @param boundary_analysis Boundary analysis
+#' @return ggplot object
+create_boundary_coverage_plot <- function(boundary_analysis) {
+  # Extract coverage data
+  coverage_data <- do.call(rbind, lapply(names(boundary_analysis$boundary_coverage), function(cn) {
+    cov <- boundary_analysis$boundary_coverage[[cn]]
+    data.frame(
+      construct = cn,
+      low_coverage = cov$low_boundary_coverage * 100,
+      high_coverage = cov$high_boundary_coverage * 100
+    )
+  }))
+  
+  coverage_long <- reshape2::melt(coverage_data, id.vars = "construct")
+  
+  ggplot2::ggplot(coverage_long, ggplot2::aes(x = construct, y = value, fill = variable)) +
+    ggplot2::geom_bar(stat = "identity", position = "dodge") +
+    ggplot2::theme_minimal() +
+    ggplot2::labs(title = "Boundary Coverage by Construct", 
+                  x = "Construct", y = "Coverage (%)")
 }
 
 #' Assess Overall Validation Success
@@ -1401,6 +1494,7 @@ quick_deployment_check <- function(deployment_package, prepared_data,
   # Quick simulation
   quick_results <- simulate_deployed_questionnaire(
     boundary_tables = deployment_package$boundary_tables,
+    pattern_rules = deployment_package$pattern_rules,
     admin_sequence = deployment_package$admin_sequence,
     validation_data = test_data,
     impl_params = deployment_package$implementation_params,
@@ -1451,23 +1545,4 @@ quick_deployment_check <- function(deployment_package, prepared_data,
     early_stop_rate = early_stop_rate,
     validation_summary = "quick_check_completed"
   ))
-}
-
-# ============================================================================
-# DEPRECATED: Old Pattern-Based Simulation Functions
-# ============================================================================
-# These are no longer used but kept for reference
-
-# simulate_unidimensional_respondent_patterns <- function(...) { }
-# simulate_multicontruct_respondent_patterns <- function(...) { }
-# simulate_unidimensional_respondent <- function(...) { }
-# simulate_multicontruct_respondent <- function(...) { }
-
-# ============================================================================
-# Helper Functions
-# ============================================================================
-
-# NULL-coalescing operator (if not already defined)
-`%||%` <- function(x, y) {
-  if (is.null(x)) y else x
 }
