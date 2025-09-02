@@ -1546,3 +1546,66 @@ quick_deployment_check <- function(deployment_package, prepared_data,
     validation_summary = "quick_check_completed"
   ))
 }
+
+
+#' Add Validation to Master Workflow
+#'
+#' This function can be called at the end of the master script to automatically
+#' run deployment validation
+#'
+#' @param deployment_package Deployment package from Module 7
+#' @param prepared_data Prepared data from Module 1
+#' @param evaluation_results Evaluation results from Module 5
+#' @param optimization_results Optimization results from Module 6 (if applicable)
+#' @param run_full_validation Whether to run full validation (default: TRUE)
+#' @param output_dir Output directory relative to current working directory
+#' @export
+run_deployment_validation <- function(deployment_package, prepared_data,
+                                      evaluation_results, optimization_results = NULL,
+                                      run_full_validation = TRUE,
+                                      output_dir = "deployment_validation") {
+  
+  # cat("\n========================================\n")
+  # cat("=== Module 8: Deployment Validation ===\n")
+  # cat("========================================\n\n")
+  
+  if (run_full_validation) {
+    # Run comprehensive validation
+    validation_results <- validate_deployment(
+      deployment_package = deployment_package,
+      prepared_data = prepared_data,
+      evaluation_results = evaluation_results,
+      optimization_results = optimization_results,
+      output_dir = output_dir
+    )
+    
+    # Print summary
+    cat("\nValidation Summary:\n")
+    cat("------------------\n")
+    cat("Deployment fidelity:", 
+        ifelse(validation_results$validation_passed, "PASSED", "FAILED"), "\n")
+    
+    if (validation_results$performance_comparison$comparison_available) {
+      cat("Performance comparison available: YES\n")
+      cat("Fidelity status:", 
+          validation_results$performance_comparison$fidelity_assessment$overall_fidelity, "\n")
+    } else {
+      cat("Performance comparison available: NO\n")
+    }
+    
+    cat("Continuation logic:", 
+        ifelse(validation_results$continuation_validation$logic_validation_passed, 
+               "PASSED", "FAILED"), "\n")
+    
+    return(validation_results)
+    
+  } else {
+    # Run quick check only
+    quick_results <- quick_deployment_check(
+      deployment_package = deployment_package,
+      prepared_data = prepared_data,
+      evaluation_results = evaluation_results
+    )
+    
+    return(quick_results)
+  }
