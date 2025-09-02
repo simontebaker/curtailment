@@ -1468,95 +1468,176 @@ generate_administration_sequence <- function(method_results, prepared_data, item
 #'   return(NULL)
 #' }
 
-#' Generate Pattern-Based Visibility Condition (FIXED FOR MULTI-CONSTRUCT)
-#'
-#' @param prev_items Previous items administered FROM THE SAME CONSTRUCT
-#' @param pattern_rules Pattern rules for current position
-#' @param stop_low_only Whether only low-risk stopping is allowed
-#' @return SurveyJS visibility condition string
-generate_pattern_visibility_condition <- function(prev_items, pattern_rules, 
-                                                  stop_low_only = FALSE) {
+#' #' Generate Pattern-Based Visibility Condition (FIXED FOR MULTI-CONSTRUCT)
+#' #'
+#' #' @param prev_items Previous items administered FROM THE SAME CONSTRUCT
+#' #' @param pattern_rules Pattern rules for current position
+#' #' @param stop_low_only Whether only low-risk stopping is allowed
+#' #' @return SurveyJS visibility condition string
+#' generate_pattern_visibility_condition <- function(prev_items, pattern_rules, 
+#'                                                   stop_low_only = FALSE) {
+#'   
+#'   if (is.null(pattern_rules) || length(prev_items) == 0) {
+#'     return(NULL)  # No pattern rules for this position
+#'   }
+#'   
+#'   # Get pattern info
+#'   low_patterns <- pattern_rules$low_risk_patterns
+#'   high_patterns <- pattern_rules$high_risk_patterns
+#'   
+#'   if (length(low_patterns) == 0 && length(high_patterns) == 0) {
+#'     return(NULL)  # No stopping patterns at this position
+#'   }
+#'   
+#'   # Build conditions for continuing (NOT stopping)
+#'   continue_conditions <- character()
+#'   
+#'   # Low-risk patterns - continue if NOT matching any low-risk pattern
+#'   if (length(low_patterns) > 0) {
+#'     low_conditions <- character()
+#'     
+#'     for (pattern_name in names(low_patterns)) {
+#'       pattern_info <- low_patterns[[pattern_name]]
+#'       scores <- pattern_info$scores
+#'       
+#'       # CRITICAL: Only check as many items as we have available
+#'       if (length(scores) != length(prev_items)) {
+#'         next  # Skip if pattern length doesn't match
+#'       }
+#'       
+#'       # Create condition for this specific pattern
+#'       pattern_checks <- character()
+#'       for (i in seq_along(scores)) {
+#'         pattern_checks <- c(pattern_checks, 
+#'                             paste0("{", prev_items[i], "} == ", scores[i]))
+#'       }
+#'       
+#'       # This pattern would trigger LOW risk stop
+#'       pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
+#'       low_conditions <- c(low_conditions, pattern_condition)
+#'     }
+#'     
+#'     # Continue if NOT matching any low-risk pattern
+#'     if (length(low_conditions) > 0) {
+#'       not_low_risk <- paste0("!(", paste(low_conditions, collapse = " or "), ")")
+#'       continue_conditions <- c(continue_conditions, not_low_risk)
+#'     }
+#'   }
+#'   
+#'   # High-risk patterns - continue if NOT matching any high-risk pattern
+#'   if (!stop_low_only && length(high_patterns) > 0) {
+#'     high_conditions <- character()
+#'     
+#'     for (pattern_name in names(high_patterns)) {
+#'       pattern_info <- high_patterns[[pattern_name]]
+#'       scores <- pattern_info$scores
+#'       
+#'       # CRITICAL: Only check patterns that match our item count
+#'       if (length(scores) != length(prev_items)) {
+#'         next
+#'       }
+#'       
+#'       pattern_checks <- character()
+#'       for (i in seq_along(scores)) {
+#'         pattern_checks <- c(pattern_checks, 
+#'                             paste0("{", prev_items[i], "} == ", scores[i]))
+#'       }
+#'       
+#'       pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
+#'       high_conditions <- c(high_conditions, pattern_condition)
+#'     }
+#'     
+#'     # Continue if NOT matching any high-risk pattern  
+#'     if (length(high_conditions) > 0) {
+#'       not_high_risk <- paste0("!(", paste(high_conditions, collapse = " or "), ")")
+#'       continue_conditions <- c(continue_conditions, not_high_risk)
+#'     }
+#'   }
+#'   
+#'   # Combine all continue conditions
+#'   if (length(continue_conditions) > 0) {
+#'     return(paste(continue_conditions, collapse = " and "))
+#'   }
+#'   
+#'   return(NULL)
+#' }
+
+#' Generate Pattern Visibility that Checks Item Existence
+generate_pattern_visibility_with_existence_check <- function(prev_items, pattern_rules, 
+                                                             stop_low_only = FALSE) {
   
-  if (is.null(pattern_rules) || length(prev_items) == 0) {
-    return(NULL)  # No pattern rules for this position
+  if (length(prev_items) == 0 || is.null(pattern_rules)) {
+    return(NULL)
   }
   
-  # Get pattern info
-  low_patterns <- pattern_rules$low_risk_patterns
-  high_patterns <- pattern_rules$high_risk_patterns
+  conditions <- character()
   
-  if (length(low_patterns) == 0 && length(high_patterns) == 0) {
-    return(NULL)  # No stopping patterns at this position
+  # First, ensure the previous item exists (was shown)
+  # In SurveyJS, we check if it has a valid response value
+  if (length(prev_items) > 1) {
+    last_item <- prev_items[length(prev_items)]
+    # Check that the last item has a valid value (0, 1, 2, or 3)
+    existence_check <- paste0(
+      "({", last_item, "} == 0 or {", last_item, "} == 1 or {", 
+      last_item, "} == 2 or {", last_item, "} == 3)"
+    )
+    conditions <- c(conditions, existence_check)
   }
   
-  # Build conditions for continuing (NOT stopping)
-  continue_conditions <- character()
+  # Now check stopping patterns
+  stop_conditions <- character()
   
-  # Low-risk patterns - continue if NOT matching any low-risk pattern
-  if (length(low_patterns) > 0) {
-    low_conditions <- character()
-    
-    for (pattern_name in names(low_patterns)) {
-      pattern_info <- low_patterns[[pattern_name]]
+  # Only check patterns where all previous items were shown
+  # (if they weren't shown, we wouldn't be here)
+  if (length(pattern_rules$low_risk_patterns) > 0) {
+    for (pattern_name in names(pattern_rules$low_risk_patterns)) {
+      pattern_info <- pattern_rules$low_risk_patterns[[pattern_name]]
       scores <- pattern_info$scores
       
-      # CRITICAL: Only check as many items as we have available
-      if (length(scores) != length(prev_items)) {
-        next  # Skip if pattern length doesn't match
-      }
+      if (length(scores) != length(prev_items)) next
       
-      # Create condition for this specific pattern
       pattern_checks <- character()
-      for (i in seq_along(scores)) {
+      for (j in seq_along(scores)) {
         pattern_checks <- c(pattern_checks, 
-                            paste0("{", prev_items[i], "} == ", scores[i]))
+                            paste0("{", prev_items[j], "} == ", scores[j]))
       }
       
-      # This pattern would trigger LOW risk stop
       pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
-      low_conditions <- c(low_conditions, pattern_condition)
-    }
-    
-    # Continue if NOT matching any low-risk pattern
-    if (length(low_conditions) > 0) {
-      not_low_risk <- paste0("!(", paste(low_conditions, collapse = " or "), ")")
-      continue_conditions <- c(continue_conditions, not_low_risk)
+      stop_conditions <- c(stop_conditions, pattern_condition)
     }
   }
   
-  # High-risk patterns - continue if NOT matching any high-risk pattern
-  if (!stop_low_only && length(high_patterns) > 0) {
-    high_conditions <- character()
-    
-    for (pattern_name in names(high_patterns)) {
-      pattern_info <- high_patterns[[pattern_name]]
+  # Similar for high-risk patterns
+  if (!stop_low_only && length(pattern_rules$high_risk_patterns) > 0) {
+    for (pattern_name in names(pattern_rules$high_risk_patterns)) {
+      pattern_info <- pattern_rules$high_risk_patterns[[pattern_name]]
       scores <- pattern_info$scores
       
-      # CRITICAL: Only check patterns that match our item count
-      if (length(scores) != length(prev_items)) {
-        next
-      }
+      if (length(scores) != length(prev_items)) next
       
       pattern_checks <- character()
-      for (i in seq_along(scores)) {
+      for (j in seq_along(scores)) {
         pattern_checks <- c(pattern_checks, 
-                            paste0("{", prev_items[i], "} == ", scores[i]))
+                            paste0("{", prev_items[j], "} == ", scores[j]))
       }
       
       pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
-      high_conditions <- c(high_conditions, pattern_condition)
-    }
-    
-    # Continue if NOT matching any high-risk pattern  
-    if (length(high_conditions) > 0) {
-      not_high_risk <- paste0("!(", paste(high_conditions, collapse = " or "), ")")
-      continue_conditions <- c(continue_conditions, not_high_risk)
+      stop_conditions <- c(stop_conditions, pattern_condition)
     }
   }
   
-  # Combine all continue conditions
-  if (length(continue_conditions) > 0) {
-    return(paste(continue_conditions, collapse = " and "))
+  # Add the stopping check
+  if (length(stop_conditions) > 0) {
+    conditions <- c(conditions, paste0("!(", paste(stop_conditions, collapse = " or "), ")"))
+  }
+  
+  # Combine: item is visible if previous item was shown AND pattern doesn't stop
+  if (length(conditions) > 0) {
+    if (length(conditions) == 1) {
+      return(conditions[1])
+    } else {
+      return(paste0("(", conditions[1], ") and (", conditions[2], ")"))
+    }
   }
   
   return(NULL)
@@ -2361,10 +2442,20 @@ generate_multi_construct_pages_patterns_fixed_v2 <- function(admin_sequence, pat
       #   stop_low_only = stop_low_only
       # )
       
+      # # Get the pattern rules for the current position (k-1 items)
+      # position_to_check <- length(prev_construct_items)
+      # if (position_to_check <= length(pattern_rules[[item_construct]])) {
+      #   visibility_condition <- generate_pattern_visibility_condition(
+      #     prev_items = prev_construct_items,
+      #     pattern_rules = pattern_rules[[item_construct]][[position_to_check]],
+      #     stop_low_only = stop_low_only
+      #   )
+      # }
+      
       # Get the pattern rules for the current position (k-1 items)
       position_to_check <- length(prev_construct_items)
       if (position_to_check <= length(pattern_rules[[item_construct]])) {
-        visibility_condition <- generate_pattern_visibility_condition(
+        visibility_condition <- generate_pattern_visibility_with_existence_check(
           prev_items = prev_construct_items,
           pattern_rules = pattern_rules[[item_construct]][[position_to_check]],
           stop_low_only = stop_low_only
