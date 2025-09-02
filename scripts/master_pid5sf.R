@@ -959,12 +959,20 @@ cat("\n==============================================\n")
 cat("=== Module 8: Deployment Validation Module ===\n")
 cat("==============================================\n\n")
 
-deployment_validation <- run_deployment_validation(
-  deployment_package,
-  prepared_data,
-  evaluation_results,
-  optimization_results,
-  run_full_validation = TRUE,
+# deployment_validation <- run_deployment_validation(
+#   deployment_package,
+#   prepared_data,
+#   evaluation_results,
+#   optimization_results,
+#   run_full_validation = TRUE,
+#   output_dir = "deployment_validation"
+# )
+
+validation_results <- validate_deployment(
+  deployment_package = deployment_package,
+  prepared_data = prepared_data,
+  evaluation_results = evaluation_results,
+  optimization_results = optimization_results,
   output_dir = "deployment_validation"
 )
 
