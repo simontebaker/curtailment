@@ -1615,7 +1615,8 @@ generate_surveyjs_json <- function(method_results, prepared_data, boundary_table
     # Multi-construct - complex continuation logic
     if (use_patterns) {
       # survey$pages <- generate_multi_construct_pages_patterns(
-      survey$pages <- generate_multi_construct_pages_patterns_fixed(
+      # survey$pages <- generate_multi_construct_pages_patterns_fixed(
+      survey$pages <- generate_multi_construct_pages_patterns_fixed_v2(
         admin_sequence,
         pattern_rules,
         item_definitions,
@@ -1950,28 +1951,116 @@ generate_unidimensional_pages_patterns <- function(admin_sequence, pattern_rules
 #'   return(NULL)
 #' }
 
-#' Generate Cumulative Pattern Visibility Condition (FIXED)
+#' #' Generate Cumulative Pattern Visibility Condition (FIXED)
+#' #'
+#' #' Creates a visibility condition that checks if we should have stopped at any previous position
+#' #'
+#' #' @param construct_items_so_far All items from this construct seen so far
+#' #' @param pattern_rules Pattern rules for this construct
+#' #' @param stop_low_only Whether only low-risk stopping is allowed
+#' #' @return SurveyJS visibility condition string
+#' generate_cumulative_pattern_visibility <- function(construct_items_so_far, 
+#'                                                    pattern_rules, 
+#'                                                    stop_low_only = FALSE) {
+#'   
+#'   if (length(construct_items_so_far) == 0 || is.null(pattern_rules)) {
+#'     return(NULL)
+#'   }
+#'   
+#'   # We need to check if we SHOULD HAVE STOPPED at any previous position
+#'   # This means checking each position k with ONLY the first k items
+#'   
+#'   stop_conditions <- character()
+#'   
+#'   # Check each previous position
+#'   for (k in 1:length(construct_items_so_far)) {
+#'     if (k > length(pattern_rules)) next
+#'     
+#'     pos_rules <- pattern_rules[[k]]
+#'     if (is.null(pos_rules)) next
+#'     
+#'     # Get ONLY the first k items for checking position k
+#'     items_at_k <- construct_items_so_far[1:k]
+#'     
+#'     # Collect all patterns that would trigger a stop at position k
+#'     position_stop_conditions <- character()
+#'     
+#'     # Check low-risk patterns
+#'     if (length(pos_rules$low_risk_patterns) > 0) {
+#'       for (pattern_name in names(pos_rules$low_risk_patterns)) {
+#'         pattern_info <- pos_rules$low_risk_patterns[[pattern_name]]
+#'         scores <- pattern_info$scores
+#'         
+#'         # Create condition for this specific pattern
+#'         pattern_checks <- character()
+#'         for (j in seq_along(scores)) {
+#'           if (j <= length(items_at_k)) {
+#'             pattern_checks <- c(pattern_checks, 
+#'                                 paste0("{", items_at_k[j], "} == ", scores[j]))
+#'           }
+#'         }
+#'         
+#'         # Only add if we have all necessary checks
+#'         if (length(pattern_checks) == length(scores)) {
+#'           pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
+#'           position_stop_conditions <- c(position_stop_conditions, pattern_condition)
+#'         }
+#'       }
+#'     }
+#'     
+#'     # Check high-risk patterns (if not stop_low_only)
+#'     if (!stop_low_only && length(pos_rules$high_risk_patterns) > 0) {
+#'       for (pattern_name in names(pos_rules$high_risk_patterns)) {
+#'         pattern_info <- pos_rules$high_risk_patterns[[pattern_name]]
+#'         scores <- pattern_info$scores
+#'         
+#'         pattern_checks <- character()
+#'         for (j in seq_along(scores)) {
+#'           if (j <= length(items_at_k)) {
+#'             pattern_checks <- c(pattern_checks, 
+#'                                 paste0("{", items_at_k[j], "} == ", scores[j]))
+#'           }
+#'         }
+#'         
+#'         if (length(pattern_checks) == length(scores)) {
+#'           pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
+#'           position_stop_conditions <- c(position_stop_conditions, pattern_condition)
+#'         }
+#'       }
+#'     }
+#'     
+#'     # If there are stop conditions for this position, add them
+#'     if (length(position_stop_conditions) > 0) {
+#'       # Any of these patterns at position k would have triggered a stop
+#'       position_stop <- paste0("(", paste(position_stop_conditions, collapse = " or "), ")")
+#'       stop_conditions <- c(stop_conditions, position_stop)
+#'     }
+#'   }
+#'   
+#'   # The item should be visible (continue) only if NONE of the stop conditions were met
+#'   if (length(stop_conditions) > 0) {
+#'     # Continue if NOT matching any stopping condition at any previous position
+#'     return(paste0("!(", paste(stop_conditions, collapse = " or "), ")"))
+#'   }
+#'   
+#'   return(NULL)
+#' }
+
+#' Generate Cumulative Pattern Visibility Condition (FULLY FIXED)
 #'
-#' Creates a visibility condition that checks if we should have stopped at any previous position
-#'
-#' @param construct_items_so_far All items from this construct seen so far
-#' @param pattern_rules Pattern rules for this construct
-#' @param stop_low_only Whether only low-risk stopping is allowed
-#' @return SurveyJS visibility condition string
-generate_cumulative_pattern_visibility <- function(construct_items_so_far, 
-                                                   pattern_rules, 
-                                                   stop_low_only = FALSE) {
+#' This checks if we should have stopped at ANY previous position
+generate_cumulative_pattern_visibility_v2 <- function(construct_items_so_far, 
+                                                      pattern_rules, 
+                                                      stop_low_only = FALSE) {
   
   if (length(construct_items_so_far) == 0 || is.null(pattern_rules)) {
     return(NULL)
   }
   
-  # We need to check if we SHOULD HAVE STOPPED at any previous position
-  # This means checking each position k with ONLY the first k items
+  # Collect ALL stop conditions from ALL previous positions
+  all_stop_conditions <- character()
   
-  stop_conditions <- character()
-  
-  # Check each previous position
+  # Check each position from 1 to current-1
   for (k in 1:length(construct_items_so_far)) {
     if (k > length(pattern_rules)) next
     
@@ -1981,8 +2070,8 @@ generate_cumulative_pattern_visibility <- function(construct_items_so_far,
     # Get ONLY the first k items for checking position k
     items_at_k <- construct_items_so_far[1:k]
     
-    # Collect all patterns that would trigger a stop at position k
-    position_stop_conditions <- character()
+    # Get stop conditions for this position
+    position_conditions <- character()
     
     # Check low-risk patterns
     if (length(pos_rules$low_risk_patterns) > 0) {
@@ -1990,20 +2079,19 @@ generate_cumulative_pattern_visibility <- function(construct_items_so_far,
         pattern_info <- pos_rules$low_risk_patterns[[pattern_name]]
         scores <- pattern_info$scores
         
-        # Create condition for this specific pattern
+        # Only check patterns that match our number of items
+        if (length(scores) != k) next
+        
+        # Build the condition for this pattern
         pattern_checks <- character()
-        for (j in seq_along(scores)) {
-          if (j <= length(items_at_k)) {
-            pattern_checks <- c(pattern_checks, 
-                                paste0("{", items_at_k[j], "} == ", scores[j]))
-          }
+        for (j in 1:k) {
+          pattern_checks <- c(pattern_checks, 
+                              paste0("{", items_at_k[j], "} == ", scores[j]))
         }
         
-        # Only add if we have all necessary checks
-        if (length(pattern_checks) == length(scores)) {
-          pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
-          position_stop_conditions <- c(position_stop_conditions, pattern_condition)
-        }
+        # This specific pattern would trigger a stop
+        pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
+        position_conditions <- c(position_conditions, pattern_condition)
       }
     }
     
@@ -2013,33 +2101,30 @@ generate_cumulative_pattern_visibility <- function(construct_items_so_far,
         pattern_info <- pos_rules$high_risk_patterns[[pattern_name]]
         scores <- pattern_info$scores
         
+        if (length(scores) != k) next
+        
         pattern_checks <- character()
-        for (j in seq_along(scores)) {
-          if (j <= length(items_at_k)) {
-            pattern_checks <- c(pattern_checks, 
-                                paste0("{", items_at_k[j], "} == ", scores[j]))
-          }
+        for (j in 1:k) {
+          pattern_checks <- c(pattern_checks, 
+                              paste0("{", items_at_k[j], "} == ", scores[j]))
         }
         
-        if (length(pattern_checks) == length(scores)) {
-          pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
-          position_stop_conditions <- c(position_stop_conditions, pattern_condition)
-        }
+        pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
+        position_conditions <- c(position_conditions, pattern_condition)
       }
     }
     
-    # If there are stop conditions for this position, add them
-    if (length(position_stop_conditions) > 0) {
-      # Any of these patterns at position k would have triggered a stop
-      position_stop <- paste0("(", paste(position_stop_conditions, collapse = " or "), ")")
-      stop_conditions <- c(stop_conditions, position_stop)
+    # Add conditions from this position to the overall list
+    if (length(position_conditions) > 0) {
+      # Any of these patterns at position k would trigger a stop
+      position_stop <- paste0("(", paste(position_conditions, collapse = " or "), ")")
+      all_stop_conditions <- c(all_stop_conditions, position_stop)
     }
   }
   
-  # The item should be visible (continue) only if NONE of the stop conditions were met
-  if (length(stop_conditions) > 0) {
-    # Continue if NOT matching any stopping condition at any previous position
-    return(paste0("!(", paste(stop_conditions, collapse = " or "), ")"))
+  # The item should be visible only if NONE of the stop conditions were met
+  if (length(all_stop_conditions) > 0) {
+    return(paste0("!(", paste(all_stop_conditions, collapse = " or "), ")"))
   }
   
   return(NULL)
@@ -2127,16 +2212,106 @@ generate_cumulative_pattern_visibility <- function(construct_items_so_far,
 #'   return(pages)
 #' }
 
-#' Fixed Multi-Construct Pages Generation with Correct Item Tracking
+#' #' Fixed Multi-Construct Pages Generation with Correct Item Tracking
+#' #'
+#' #' This ensures visibility conditions only reference items from the SAME construct
+#' generate_multi_construct_pages_patterns_fixed <- function(admin_sequence, pattern_rules,
+#'                                                           item_definitions, survey_config,
+#'                                                           data_config, method_results,
+#'                                                           reduction_method, stop_low_only) {
+#'   pages <- list()
+#'   
+#'   # Track items seen by construct - CRITICAL for correct visibility
+#'   construct_items_administered <- list()
+#'   for (cn in names(data_config$constructs)) {
+#'     construct_items_administered[[cn]] <- character()
+#'   }
+#'   
+#'   # Get min_items_per_construct
+#'   min_items_per_construct <- method_results$reduction_result$constraints_applied$min_items_per_construct %||% 
+#'     data_config$constraints$min_items_per_construct %||% 
+#'     0
+#'   
+#'   for (i in 1:nrow(admin_sequence)) {
+#'     item_id <- admin_sequence$item_id[i]
+#'     original_pos <- admin_sequence$original_position[i]
+#'     item_construct <- admin_sequence$construct[i]
+#'     
+#'     # Track this item for its construct
+#'     construct_items_administered[[item_construct]] <- c(construct_items_administered[[item_construct]], item_id)
+#'     within_construct_pos <- length(construct_items_administered[[item_construct]])
+#'     
+#'     # Create page
+#'     page <- list(
+#'       name = as.character(original_pos),
+#'       elements = list()
+#'     )
+#'     
+#'     # Initialize question
+#'     question <- list()
+#'     question$type <- "rating"
+#'     question$name <- item_id
+#'     
+#'     # Generate visibility condition based on SAME CONSTRUCT items only
+#'     visibility_condition <- NULL
+#'     
+#'     # Only add visibility after minimum items per construct
+#'     if (within_construct_pos > 1 && 
+#'         within_construct_pos > min_items_per_construct &&
+#'         reduction_method == "sc_ep" && 
+#'         !is.null(pattern_rules[[item_construct]])) {
+#'       
+#'       # Get PREVIOUS items from THIS CONSTRUCT ONLY (not including current)
+#'       prev_construct_items <- construct_items_administered[[item_construct]][1:(within_construct_pos-1)]
+#'       
+#'       # Get the pattern rules for this construct at the previous position
+#'       construct_rules <- pattern_rules[[item_construct]]
+#'       position_to_check <- length(prev_construct_items)
+#'       
+#'       if (position_to_check <= length(construct_rules) && 
+#'           !is.null(construct_rules[[position_to_check]])) {
+#'         
+#'         # Generate visibility condition for these specific items
+#'         visibility_condition <- generate_pattern_visibility_condition(
+#'           prev_items = prev_construct_items,
+#'           pattern_rules = construct_rules[[position_to_check]],
+#'           stop_low_only = stop_low_only
+#'         )
+#'       }
+#'     }
+#'     
+#'     # Add visibleIf only if we have a condition and item is not mandatory
+#'     if (!is.null(visibility_condition)) {
+#'       question$visibleIf <- visibility_condition
+#'       question$requiredIf <- visibility_condition
+#'     } else if (i == 1 || (min_items_per_construct > 0 && within_construct_pos <= min_items_per_construct)) {
+#'       # Mandatory items are always required
+#'       question$isRequired <- TRUE
+#'     }
+#'     
+#'     # Rest of question setup
+#'     question$title <- item_definitions[[item_id]]$item_text
+#'     question$autoGenerate <- survey_config$autoGenerate %||% FALSE
+#'     question$rateValues <- item_definitions[[item_id]]$rateValues
+#'     question$displayMode <- survey_config$displayMode %||% "buttons"
+#'     
+#'     page$elements[[1]] <- question
+#'     pages[[i]] <- page
+#'   }
+#'   
+#'   return(pages)
+#' }
+
+#' Generate Multi-Construct Pages with CUMULATIVE Pattern Checking
 #'
-#' This ensures visibility conditions only reference items from the SAME construct
-generate_multi_construct_pages_patterns_fixed <- function(admin_sequence, pattern_rules,
-                                                          item_definitions, survey_config,
-                                                          data_config, method_results,
-                                                          reduction_method, stop_low_only) {
+#' This version properly accumulates stop conditions across all previous positions
+generate_multi_construct_pages_patterns_fixed_v2 <- function(admin_sequence, pattern_rules,
+                                                             item_definitions, survey_config,
+                                                             data_config, method_results,
+                                                             reduction_method, stop_low_only) {
   pages <- list()
   
-  # Track items seen by construct - CRITICAL for correct visibility
+  # Track items seen by construct
   construct_items_administered <- list()
   for (cn in names(data_config$constructs)) {
     construct_items_administered[[cn]] <- character()
@@ -2167,7 +2342,7 @@ generate_multi_construct_pages_patterns_fixed <- function(admin_sequence, patter
     question$type <- "rating"
     question$name <- item_id
     
-    # Generate visibility condition based on SAME CONSTRUCT items only
+    # Generate CUMULATIVE visibility condition
     visibility_condition <- NULL
     
     # Only add visibility after minimum items per construct
@@ -2179,20 +2354,12 @@ generate_multi_construct_pages_patterns_fixed <- function(admin_sequence, patter
       # Get PREVIOUS items from THIS CONSTRUCT ONLY (not including current)
       prev_construct_items <- construct_items_administered[[item_construct]][1:(within_construct_pos-1)]
       
-      # Get the pattern rules for this construct at the previous position
-      construct_rules <- pattern_rules[[item_construct]]
-      position_to_check <- length(prev_construct_items)
-      
-      if (position_to_check <= length(construct_rules) && 
-          !is.null(construct_rules[[position_to_check]])) {
-        
-        # Generate visibility condition for these specific items
-        visibility_condition <- generate_pattern_visibility_condition(
-          prev_items = prev_construct_items,
-          pattern_rules = construct_rules[[position_to_check]],
-          stop_low_only = stop_low_only
-        )
-      }
+      # Use the CUMULATIVE function to check ALL previous positions
+      visibility_condition <- generate_cumulative_pattern_visibility_v2(
+        construct_items_so_far = prev_construct_items,
+        pattern_rules = pattern_rules[[item_construct]],
+        stop_low_only = stop_low_only
+      )
     }
     
     # Add visibleIf only if we have a condition and item is not mandatory
