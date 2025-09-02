@@ -2354,12 +2354,23 @@ generate_multi_construct_pages_patterns_fixed_v2 <- function(admin_sequence, pat
       # Get PREVIOUS items from THIS CONSTRUCT ONLY (not including current)
       prev_construct_items <- construct_items_administered[[item_construct]][1:(within_construct_pos-1)]
       
-      # Use the CUMULATIVE function to check ALL previous positions
-      visibility_condition <- generate_cumulative_pattern_visibility_v2(
-        construct_items_so_far = prev_construct_items,
-        pattern_rules = pattern_rules[[item_construct]],
-        stop_low_only = stop_low_only
-      )
+      # # Use the CUMULATIVE function to check ALL previous positions
+      # visibility_condition <- generate_cumulative_pattern_visibility_v2(
+      #   construct_items_so_far = prev_construct_items,
+      #   pattern_rules = pattern_rules[[item_construct]],
+      #   stop_low_only = stop_low_only
+      # )
+      
+      # Get the pattern rules for the current position (k-1 items)
+      position_to_check <- length(prev_construct_items)
+      if (position_to_check <= length(pattern_rules[[item_construct]])) {
+        visibility_condition <- generate_pattern_visibility_condition(
+          prev_items = prev_construct_items,
+          pattern_rules = pattern_rules[[item_construct]][[position_to_check]],
+          stop_low_only = stop_low_only
+        )
+      }
+      
     }
     
     # Add visibleIf only if we have a condition and item is not mandatory
