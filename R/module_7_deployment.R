@@ -1770,6 +1770,91 @@ generate_unidimensional_pages_patterns <- function(admin_sequence, pattern_rules
 #'   return(pages)
 #' }
 
+#' #' Generate Cumulative Pattern Visibility Condition (FIXED)
+#' #'
+#' #' Creates a visibility condition that checks if we should have stopped at any previous position
+#' #'
+#' #' @param construct_items_so_far All items from this construct seen so far
+#' #' @param pattern_rules Pattern rules for this construct
+#' #' @param stop_low_only Whether only low-risk stopping is allowed
+#' #' @return SurveyJS visibility condition string
+#' generate_cumulative_pattern_visibility <- function(construct_items_so_far, 
+#'                                                    pattern_rules, 
+#'                                                    stop_low_only = FALSE) {
+#'   
+#'   if (length(construct_items_so_far) == 0 || is.null(pattern_rules)) {
+#'     return(NULL)
+#'   }
+#'   
+#'   # We need to check if we SHOULD HAVE STOPPED at any previous position
+#'   # This means checking each position k with ONLY the first k items
+#'   
+#'   stop_conditions <- character()
+#'   
+#'   # Check each previous position
+#'   for (k in 1:length(construct_items_so_far)) {
+#'     if (k > length(pattern_rules)) next
+#'     
+#'     pos_rules <- pattern_rules[[k]]
+#'     if (is.null(pos_rules)) next
+#'     
+#'     # Get ONLY the first k items for checking position k
+#'     items_at_k <- construct_items_so_far[1:k]
+#'     
+#'     # Collect patterns that would have stopped at position k
+#'     position_stop_conditions <- character()
+#'     
+#'     # Low-risk patterns at position k
+#'     if (!is.null(pos_rules$low_risk_patterns)) {
+#'       for (pattern_name in names(pos_rules$low_risk_patterns)) {
+#'         pattern_info <- pos_rules$low_risk_patterns[[pattern_name]]
+#'         scores <- pattern_info$scores
+#'         
+#'         # CRITICAL: Only check patterns that match the number of items at position k
+#'         if (length(scores) == k) {
+#'           checks <- character()
+#'           for (j in 1:k) {
+#'             checks <- c(checks, paste0("{", items_at_k[j], "} == ", scores[j]))
+#'           }
+#'           pattern_cond <- paste0("(", paste(checks, collapse = " and "), ")")
+#'           position_stop_conditions <- c(position_stop_conditions, pattern_cond)
+#'         }
+#'       }
+#'     }
+#'     
+#'     # High-risk patterns at position k (if not stop_low_only)
+#'     if (!stop_low_only && !is.null(pos_rules$high_risk_patterns)) {
+#'       for (pattern_name in names(pos_rules$high_risk_patterns)) {
+#'         pattern_info <- pos_rules$high_risk_patterns[[pattern_name]]
+#'         scores <- pattern_info$scores
+#'         
+#'         # CRITICAL: Only check patterns that match the number of items at position k
+#'         if (length(scores) == k) {
+#'           checks <- character()
+#'           for (j in 1:k) {
+#'             checks <- c(checks, paste0("{", items_at_k[j], "} == ", scores[j]))
+#'           }
+#'           pattern_cond <- paste0("(", paste(checks, collapse = " and "), ")")
+#'           position_stop_conditions <- c(position_stop_conditions, pattern_cond)
+#'         }
+#'       }
+#'     }
+#'     
+#'     # Add all stop conditions for this position
+#'     if (length(position_stop_conditions) > 0) {
+#'       stop_conditions <- c(stop_conditions, position_stop_conditions)
+#'     }
+#'   }
+#'   
+#'   # Return condition to CONTINUE (none of the stop conditions were met)
+#'   if (length(stop_conditions) > 0) {
+#'     # Continue if NONE of the stopping conditions at ANY previous position were met
+#'     return(paste0("!(", paste(stop_conditions, collapse = " or "), ")"))
+#'   }
+#'   
+#'   return(NULL)
+#' }
+
 #' Generate Cumulative Pattern Visibility Condition (FIXED)
 #'
 #' Creates a visibility condition that checks if we should have stopped at any previous position
@@ -1801,54 +1886,64 @@ generate_cumulative_pattern_visibility <- function(construct_items_so_far,
     # Get ONLY the first k items for checking position k
     items_at_k <- construct_items_so_far[1:k]
     
-    # Collect patterns that would have stopped at position k
+    # Collect all patterns that would trigger a stop at position k
     position_stop_conditions <- character()
     
-    # Low-risk patterns at position k
-    if (!is.null(pos_rules$low_risk_patterns)) {
+    # Check low-risk patterns
+    if (length(pos_rules$low_risk_patterns) > 0) {
       for (pattern_name in names(pos_rules$low_risk_patterns)) {
         pattern_info <- pos_rules$low_risk_patterns[[pattern_name]]
         scores <- pattern_info$scores
         
-        # CRITICAL: Only check patterns that match the number of items at position k
-        if (length(scores) == k) {
-          checks <- character()
-          for (j in 1:k) {
-            checks <- c(checks, paste0("{", items_at_k[j], "} == ", scores[j]))
+        # Create condition for this specific pattern
+        pattern_checks <- character()
+        for (j in seq_along(scores)) {
+          if (j <= length(items_at_k)) {
+            pattern_checks <- c(pattern_checks, 
+                                paste0("{", items_at_k[j], "} == ", scores[j]))
           }
-          pattern_cond <- paste0("(", paste(checks, collapse = " and "), ")")
-          position_stop_conditions <- c(position_stop_conditions, pattern_cond)
+        }
+        
+        # Only add if we have all necessary checks
+        if (length(pattern_checks) == length(scores)) {
+          pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
+          position_stop_conditions <- c(position_stop_conditions, pattern_condition)
         }
       }
     }
     
-    # High-risk patterns at position k (if not stop_low_only)
-    if (!stop_low_only && !is.null(pos_rules$high_risk_patterns)) {
+    # Check high-risk patterns (if not stop_low_only)
+    if (!stop_low_only && length(pos_rules$high_risk_patterns) > 0) {
       for (pattern_name in names(pos_rules$high_risk_patterns)) {
         pattern_info <- pos_rules$high_risk_patterns[[pattern_name]]
         scores <- pattern_info$scores
         
-        # CRITICAL: Only check patterns that match the number of items at position k
-        if (length(scores) == k) {
-          checks <- character()
-          for (j in 1:k) {
-            checks <- c(checks, paste0("{", items_at_k[j], "} == ", scores[j]))
+        pattern_checks <- character()
+        for (j in seq_along(scores)) {
+          if (j <= length(items_at_k)) {
+            pattern_checks <- c(pattern_checks, 
+                                paste0("{", items_at_k[j], "} == ", scores[j]))
           }
-          pattern_cond <- paste0("(", paste(checks, collapse = " and "), ")")
-          position_stop_conditions <- c(position_stop_conditions, pattern_cond)
+        }
+        
+        if (length(pattern_checks) == length(scores)) {
+          pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
+          position_stop_conditions <- c(position_stop_conditions, pattern_condition)
         }
       }
     }
     
-    # Add all stop conditions for this position
+    # If there are stop conditions for this position, add them
     if (length(position_stop_conditions) > 0) {
-      stop_conditions <- c(stop_conditions, position_stop_conditions)
+      # Any of these patterns at position k would have triggered a stop
+      position_stop <- paste0("(", paste(position_stop_conditions, collapse = " or "), ")")
+      stop_conditions <- c(stop_conditions, position_stop)
     }
   }
   
-  # Return condition to CONTINUE (none of the stop conditions were met)
+  # The item should be visible (continue) only if NONE of the stop conditions were met
   if (length(stop_conditions) > 0) {
-    # Continue if NONE of the stopping conditions at ANY previous position were met
+    # Continue if NOT matching any stopping condition at any previous position
     return(paste0("!(", paste(stop_conditions, collapse = " or "), ")"))
   }
   
