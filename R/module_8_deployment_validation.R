@@ -425,28 +425,65 @@ simulate_json_logic_for_respondent <- function(respondent_idx, validation_data,
   ))
 }
 
-#' Evaluate Visibility Condition with Collected Responses
-#'
-#' @param condition Visibility condition string
-#' @param collected_responses Responses collected so far
-#' @return Boolean for visibility
+#' #' Evaluate Visibility Condition with Collected Responses
+#' #'
+#' #' @param condition Visibility condition string
+#' #' @param collected_responses Responses collected so far
+#' #' @return Boolean for visibility
+#' evaluate_visibility_with_collected_responses <- function(condition, collected_responses) {
+#'   
+#'   # Replace item references with values for collected responses
+#'   eval_condition <- condition
+#'   
+#'   for (item_name in names(collected_responses)) {
+#'     pattern <- paste0("\\{", item_name, "\\}")
+#'     replacement <- as.character(collected_responses[[item_name]])
+#'     eval_condition <- gsub(pattern, replacement, eval_condition)
+#'   }
+#'   
+#'   # Check if there are still unreplaced item references
+#'   # These would be items that weren't shown/collected
+#'   if (grepl("\\{[^}]+\\}", eval_condition)) {
+#'     # Can't evaluate condition with missing items
+#'     # Conservative approach: assume visible
+#'     return(TRUE)
+#'   }
+#'   
+#'   # Convert to R syntax
+#'   eval_condition <- gsub(" and ", " & ", eval_condition)
+#'   eval_condition <- gsub(" or ", " | ", eval_condition)
+#'   
+#'   # Evaluate
+#'   tryCatch({
+#'     result <- eval(parse(text = eval_condition))
+#'     return(as.logical(result))
+#'   }, error = function(e) {
+#'     warning(paste("Failed to evaluate condition:", condition))
+#'     return(TRUE)  # Default to visible if can't evaluate
+#'   })
+#' }
+
 evaluate_visibility_with_collected_responses <- function(condition, collected_responses) {
-  
-  # Replace item references with values for collected responses
   eval_condition <- condition
   
+  # First, extract ALL item references from the condition
+  all_refs <- regmatches(condition, gregexpr("\\{([^}]+)\\}", condition))[[1]]
+  all_items <- unique(gsub("[{}]", "", all_refs))
+  
+  # Check if any referenced items are missing
+  missing_items <- setdiff(all_items, names(collected_responses))
+  
+  # If ANY referenced item is missing, the condition can't be satisfied
+  # This item should not be shown
+  if (length(missing_items) > 0) {
+    return(FALSE)  # Hide the item if it depends on unshown items
+  }
+  
+  # All referenced items exist, proceed with evaluation
   for (item_name in names(collected_responses)) {
     pattern <- paste0("\\{", item_name, "\\}")
     replacement <- as.character(collected_responses[[item_name]])
     eval_condition <- gsub(pattern, replacement, eval_condition)
-  }
-  
-  # Check if there are still unreplaced item references
-  # These would be items that weren't shown/collected
-  if (grepl("\\{[^}]+\\}", eval_condition)) {
-    # Can't evaluate condition with missing items
-    # Conservative approach: assume visible
-    return(TRUE)
   }
   
   # Convert to R syntax
@@ -459,7 +496,7 @@ evaluate_visibility_with_collected_responses <- function(condition, collected_re
     return(as.logical(result))
   }, error = function(e) {
     warning(paste("Failed to evaluate condition:", condition))
-    return(TRUE)  # Default to visible if can't evaluate
+    return(FALSE)  # Default to HIDDEN if can't evaluate (changed from TRUE)
   })
 }
 
