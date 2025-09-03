@@ -1562,85 +1562,151 @@ generate_administration_sequence <- function(method_results, prepared_data, item
 #'   return(NULL)
 #' }
 
-#' Generate Pattern Visibility that Checks Item Existence
-generate_pattern_visibility_with_existence_check <- function(prev_items, pattern_rules, 
-                                                             stop_low_only = FALSE) {
+#' #' Generate Pattern Visibility that Checks Item Existence
+#' generate_pattern_visibility_with_existence_check <- function(prev_items, pattern_rules, 
+#'                                                              stop_low_only = FALSE) {
+#'   
+#'   if (length(prev_items) == 0 || is.null(pattern_rules)) {
+#'     return(NULL)
+#'   }
+#'   
+#'   conditions <- character()
+#'   
+#'   # First, ensure the previous item exists (was shown)
+#'   # In SurveyJS, we check if it has a valid response value
+#'   if (length(prev_items) > 1) {
+#'     last_item <- prev_items[length(prev_items)]
+#'     # Check that the last item has a valid value (0, 1, 2, or 3)
+#'     existence_check <- paste0(
+#'       "({", last_item, "} == 0 or {", last_item, "} == 1 or {", 
+#'       last_item, "} == 2 or {", last_item, "} == 3)"
+#'     )
+#'     conditions <- c(conditions, existence_check)
+#'   }
+#'   
+#'   # Now check stopping patterns
+#'   stop_conditions <- character()
+#'   
+#'   # Only check patterns where all previous items were shown
+#'   # (if they weren't shown, we wouldn't be here)
+#'   if (length(pattern_rules$low_risk_patterns) > 0) {
+#'     for (pattern_name in names(pattern_rules$low_risk_patterns)) {
+#'       pattern_info <- pattern_rules$low_risk_patterns[[pattern_name]]
+#'       scores <- pattern_info$scores
+#'       
+#'       if (length(scores) != length(prev_items)) next
+#'       
+#'       pattern_checks <- character()
+#'       for (j in seq_along(scores)) {
+#'         pattern_checks <- c(pattern_checks, 
+#'                             paste0("{", prev_items[j], "} == ", scores[j]))
+#'       }
+#'       
+#'       pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
+#'       stop_conditions <- c(stop_conditions, pattern_condition)
+#'     }
+#'   }
+#'   
+#'   # Similar for high-risk patterns
+#'   if (!stop_low_only && length(pattern_rules$high_risk_patterns) > 0) {
+#'     for (pattern_name in names(pattern_rules$high_risk_patterns)) {
+#'       pattern_info <- pattern_rules$high_risk_patterns[[pattern_name]]
+#'       scores <- pattern_info$scores
+#'       
+#'       if (length(scores) != length(prev_items)) next
+#'       
+#'       pattern_checks <- character()
+#'       for (j in seq_along(scores)) {
+#'         pattern_checks <- c(pattern_checks, 
+#'                             paste0("{", prev_items[j], "} == ", scores[j]))
+#'       }
+#'       
+#'       pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
+#'       stop_conditions <- c(stop_conditions, pattern_condition)
+#'     }
+#'   }
+#'   
+#'   # Add the stopping check
+#'   if (length(stop_conditions) > 0) {
+#'     conditions <- c(conditions, paste0("!(", paste(stop_conditions, collapse = " or "), ")"))
+#'   }
+#'   
+#'   # Combine: item is visible if previous item was shown AND pattern doesn't stop
+#'   if (length(conditions) > 0) {
+#'     if (length(conditions) == 1) {
+#'       return(conditions[1])
+#'     } else {
+#'       return(paste0("(", conditions[1], ") and (", conditions[2], ")"))
+#'     }
+#'   }
+#'   
+#'   return(NULL)
+#' }
+
+#' Generate Pattern Visibility with Affirmative Logic
+generate_pattern_visibility_affirmative <- function(prev_items, pattern_rules, 
+                                                    stop_low_only = FALSE) {
   
   if (length(prev_items) == 0 || is.null(pattern_rules)) {
     return(NULL)
   }
   
-  conditions <- character()
+  # Get all possible patterns for this position
+  all_patterns <- character()
+  n_items <- length(prev_items)
   
-  # First, ensure the previous item exists (was shown)
-  # In SurveyJS, we check if it has a valid response value
-  if (length(prev_items) > 1) {
-    last_item <- prev_items[length(prev_items)]
-    # Check that the last item has a valid value (0, 1, 2, or 3)
-    existence_check <- paste0(
-      "({", last_item, "} == 0 or {", last_item, "} == 1 or {", 
-      last_item, "} == 2 or {", last_item, "} == 3)"
-    )
-    conditions <- c(conditions, existence_check)
+  # Generate all possible patterns (0-3 for each item)
+  for (i in 0:(4^n_items - 1)) {
+    pattern <- numeric(n_items)
+    temp <- i
+    for (j in 1:n_items) {
+      pattern[j] <- temp %% 4
+      temp <- temp %/% 4
+    }
+    all_patterns <- c(all_patterns, paste(pattern, collapse="_"))
   }
   
-  # Now check stopping patterns
-  stop_conditions <- character()
+  # Identify which patterns trigger stopping
+  stop_patterns <- character()
   
-  # Only check patterns where all previous items were shown
-  # (if they weren't shown, we wouldn't be here)
+  # Add low-risk stop patterns
   if (length(pattern_rules$low_risk_patterns) > 0) {
-    for (pattern_name in names(pattern_rules$low_risk_patterns)) {
-      pattern_info <- pattern_rules$low_risk_patterns[[pattern_name]]
-      scores <- pattern_info$scores
-      
-      if (length(scores) != length(prev_items)) next
-      
-      pattern_checks <- character()
-      for (j in seq_along(scores)) {
-        pattern_checks <- c(pattern_checks, 
-                            paste0("{", prev_items[j], "} == ", scores[j]))
-      }
-      
-      pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
-      stop_conditions <- c(stop_conditions, pattern_condition)
-    }
+    stop_patterns <- c(stop_patterns, names(pattern_rules$low_risk_patterns))
   }
   
-  # Similar for high-risk patterns
+  # Add high-risk stop patterns if not stop_low_only
   if (!stop_low_only && length(pattern_rules$high_risk_patterns) > 0) {
-    for (pattern_name in names(pattern_rules$high_risk_patterns)) {
-      pattern_info <- pattern_rules$high_risk_patterns[[pattern_name]]
-      scores <- pattern_info$scores
-      
-      if (length(scores) != length(prev_items)) next
-      
-      pattern_checks <- character()
-      for (j in seq_along(scores)) {
-        pattern_checks <- c(pattern_checks, 
-                            paste0("{", prev_items[j], "} == ", scores[j]))
-      }
-      
-      pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
-      stop_conditions <- c(stop_conditions, pattern_condition)
+    stop_patterns <- c(stop_patterns, names(pattern_rules$high_risk_patterns))
+  }
+  
+  # Continuation patterns are all patterns that DON'T trigger stopping
+  continuation_patterns <- setdiff(all_patterns, stop_patterns)
+  
+  if (length(continuation_patterns) == 0) {
+    # All patterns trigger stopping - item should never be shown
+    return("false")
+  }
+  
+  # Build affirmative conditions for each continuation pattern
+  continuation_conditions <- character()
+  
+  for (pattern_str in continuation_patterns) {
+    scores <- as.numeric(strsplit(pattern_str, "_")[[1]])
+    
+    pattern_checks <- character()
+    for (j in seq_along(scores)) {
+      pattern_checks <- c(pattern_checks, 
+                          paste0("{", prev_items[j], "} == ", scores[j]))
     }
+    
+    # This pattern allows continuation
+    pattern_condition <- paste0("(", paste(pattern_checks, collapse = " and "), ")")
+    continuation_conditions <- c(continuation_conditions, pattern_condition)
   }
   
-  # Add the stopping check
-  if (length(stop_conditions) > 0) {
-    conditions <- c(conditions, paste0("!(", paste(stop_conditions, collapse = " or "), ")"))
-  }
-  
-  # Combine: item is visible if previous item was shown AND pattern doesn't stop
-  if (length(conditions) > 0) {
-    if (length(conditions) == 1) {
-      return(conditions[1])
-    } else {
-      return(paste0("(", conditions[1], ") and (", conditions[2], ")"))
-    }
-  }
-  
-  return(NULL)
+  # Item is visible if ANY continuation pattern matches
+  # If an item wasn't shown, {item} == value will be false, making the whole pattern false
+  return(paste0("(", paste(continuation_conditions, collapse = " or "), ")"))
 }
 
 #' Generate SurveyJS JSON Configuration (ENHANCED WITH PATTERN SUPPORT)
@@ -2452,10 +2518,20 @@ generate_multi_construct_pages_patterns_fixed_v2 <- function(admin_sequence, pat
       #   )
       # }
       
+      # # Get the pattern rules for the current position (k-1 items)
+      # position_to_check <- length(prev_construct_items)
+      # if (position_to_check <= length(pattern_rules[[item_construct]])) {
+      #   visibility_condition <- generate_pattern_visibility_with_existence_check(
+      #     prev_items = prev_construct_items,
+      #     pattern_rules = pattern_rules[[item_construct]][[position_to_check]],
+      #     stop_low_only = stop_low_only
+      #   )
+      # }
+      
       # Get the pattern rules for the current position (k-1 items)
       position_to_check <- length(prev_construct_items)
       if (position_to_check <= length(pattern_rules[[item_construct]])) {
-        visibility_condition <- generate_pattern_visibility_with_existence_check(
+        visibility_condition <- generate_pattern_visibility_affirmative(
           prev_items = prev_construct_items,
           pattern_rules = pattern_rules[[item_construct]][[position_to_check]],
           stop_low_only = stop_low_only
