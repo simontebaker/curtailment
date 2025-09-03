@@ -451,7 +451,126 @@ reduce_dc <- function(ordered_items, data, config, method_params, cutoff,
   return(result)
 }
 
-#' Stochastic Curtailment - Empirical Proportions
+#' #' Stochastic Curtailment - Empirical Proportions
+#' #'
+#' #' @param ordered_items Vector of ordered item names
+#' #' @param data Data frame
+#' #' @param config Configuration
+#' #' @param method_params Method parameters (gamma_0, gamma_1)
+#' #' @param cutoff Classification cutoff
+#' #' @param training_params Parameters from training phase
+#' #' @param stop_low_only Whether to only stop for low-risk classification
+#' #' @param min_items_per_construct Minimum items per construct
+#' #' @return Reduction results
+#' reduce_sc_ep <- function(ordered_items, data, config, method_params, cutoff, 
+#'                          training_params, stop_low_only, min_items_per_construct) {
+#'   
+#'   # Extract gamma parameters
+#'   gamma_0 <- method_params$gamma_0 %||% 0.95
+#'   gamma_1 <- method_params$gamma_1 %||% 0.95
+#'   
+#'   n_respondents <- nrow(data)
+#'   n_items <- length(ordered_items)
+#'   
+#'   # Initialize results
+#'   items_administered <- matrix(FALSE, nrow = n_respondents, ncol = n_items)
+#'   colnames(items_administered) <- ordered_items
+#'   stopped_at <- numeric(n_respondents)
+#'   classifications <- numeric(n_respondents)
+#'   
+#'   # Build or use lookup tables
+#'   if (!is.null(training_params)) {
+#'     lookup_tables <- training_params$lookup_tables
+#'   } else {
+#'     # Build empirical probability tables from training data
+#'     lookup_tables <- build_empirical_tables(data, ordered_items, config, cutoff)
+#'   }
+#'   
+#'   # Process each respondent
+#'   for (i in seq_len(n_respondents)) {
+#'     responses <- numeric()
+#'     items_given <- character()
+#'     
+#'     for (j in seq_along(ordered_items)) {
+#'       item <- ordered_items[j]
+#'       
+#'       # Check construct constraints
+#'       if (config$questionnaire_type == "multi-construct") {
+#'         if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
+#'           items_administered[i, j] <- TRUE
+#'           items_given <- c(items_given, item)
+#'           if (item %in% names(data) && !is.na(data[i, item])) {
+#'             responses <- c(responses, data[i, item])
+#'           }
+#'           next
+#'         }
+#'       }
+#'       
+#'       # Administer item
+#'       items_administered[i, j] <- TRUE
+#'       items_given <- c(items_given, item)
+#'       
+#'       if (item %in% names(data) && !is.na(data[i, item])) {
+#'         responses <- c(responses, data[i, item])
+#'       }
+#'       
+#'       # Look up conditional probabilities
+#'       response_pattern <- paste(responses, collapse = "_")
+#'       
+#'       if (response_pattern %in% names(lookup_tables[[j]])) {
+#'         probs <- lookup_tables[[j]][[response_pattern]]
+#'         prob_low <- probs["prob_low"]
+#'         prob_high <- probs["prob_high"]
+#'         
+#'         # Check stopping criteria
+#'         if (prob_low >= gamma_0) {
+#'           classifications[i] <- 0
+#'           stopped_at[i] <- j
+#'           break
+#'         } else if (prob_high >= gamma_1 && !stop_low_only) {
+#'           classifications[i] <- 1
+#'           stopped_at[i] <- j
+#'           break
+#'         }
+#'       }
+#'       
+#'       # If we've reached the end
+#'       if (j == n_items) {
+#'         total_score <- sum(responses)
+#'         classifications[i] <- ifelse(total_score >= cutoff, 1, 0)
+#'         stopped_at[i] <- j
+#'       }
+#'     }
+#'   }
+#'   
+#'   # Store training parameters
+#'   if (is.null(training_params)) {
+#'     training_params <- list(
+#'       lookup_tables = lookup_tables,
+#'       cutoff = cutoff,
+#'       gamma_0 = gamma_0,
+#'       gamma_1 = gamma_1
+#'     )
+#'   }
+#'   
+#'   result <- list(
+#'     items_administered = items_administered,
+#'     classifications = classifications,
+#'     stopped_at = stopped_at,
+#'     n_items_used = rowSums(items_administered),
+#'     method_info = list(
+#'       description = "Stochastic curtailment using empirical conditional probabilities",
+#'       gamma_0 = gamma_0,
+#'       gamma_1 = gamma_1,
+#'       stop_low_only = stop_low_only
+#'     ),
+#'     training_params = training_params
+#'   )
+#'   
+#'   return(result)
+#' }
+
+#' Stochastic Curtailment - Empirical Proportions (CORRECTED)
 #'
 #' @param ordered_items Vector of ordered item names
 #' @param data Data frame
@@ -475,7 +594,7 @@ reduce_sc_ep <- function(ordered_items, data, config, method_params, cutoff,
   # Initialize results
   items_administered <- matrix(FALSE, nrow = n_respondents, ncol = n_items)
   colnames(items_administered) <- ordered_items
-  stopped_at <- numeric(n_respondents)
+  stopped_at <- numeric(n_respondents)  # Initialized to zeros
   classifications <- numeric(n_respondents)
   
   # Build or use lookup tables
@@ -490,6 +609,7 @@ reduce_sc_ep <- function(ordered_items, data, config, method_params, cutoff,
   for (i in seq_len(n_respondents)) {
     responses <- numeric()
     items_given <- character()
+    items_count <- 0  # EXPLICIT COUNTER for items administered
     
     for (j in seq_along(ordered_items)) {
       item <- ordered_items[j]
@@ -497,24 +617,31 @@ reduce_sc_ep <- function(ordered_items, data, config, method_params, cutoff,
       # Check construct constraints
       if (config$questionnaire_type == "multi-construct") {
         if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
+          # Must administer this item due to constraints
           items_administered[i, j] <- TRUE
           items_given <- c(items_given, item)
+          items_count <- items_count + 1  # INCREMENT COUNTER
+          
           if (item %in% names(data) && !is.na(data[i, item])) {
             responses <- c(responses, data[i, item])
           }
-          next
+          next  # Skip stopping check for this item
         }
       }
       
-      # Administer item
+      # Administer item j
       items_administered[i, j] <- TRUE
       items_given <- c(items_given, item)
+      items_count <- items_count + 1  # INCREMENT COUNTER
       
       if (item %in% names(data) && !is.na(data[i, item])) {
         responses <- c(responses, data[i, item])
       }
       
-      # Look up conditional probabilities
+      # After administering item j, we have j responses
+      # Check if we should stop based on the pattern so far
+      
+      # Look up conditional probabilities for pattern of length j
       response_pattern <- paste(responses, collapse = "_")
       
       if (response_pattern %in% names(lookup_tables[[j]])) {
@@ -524,21 +651,35 @@ reduce_sc_ep <- function(ordered_items, data, config, method_params, cutoff,
         
         # Check stopping criteria
         if (prob_low >= gamma_0) {
+          # Low-risk classification - stop here
           classifications[i] <- 0
-          stopped_at[i] <- j
-          break
+          stopped_at[i] <- items_count  # Use explicit counter
+          break  # Stop administering items
         } else if (prob_high >= gamma_1 && !stop_low_only) {
+          # High-risk classification - stop here (if allowed)
           classifications[i] <- 1
-          stopped_at[i] <- j
-          break
+          stopped_at[i] <- items_count  # Use explicit counter
+          break  # Stop administering items
         }
       }
       
-      # If we've reached the end
+      # If we've reached the last item and haven't stopped yet
       if (j == n_items) {
+        # Calculate final classification based on total score
         total_score <- sum(responses)
         classifications[i] <- ifelse(total_score >= cutoff, 1, 0)
-        stopped_at[i] <- j
+        stopped_at[i] <- items_count  # Use explicit counter
+      }
+    }
+    
+    # SAFETY CHECK: Ensure stopped_at was set
+    if (stopped_at[i] == 0) {
+      # This should not happen, but if it does, use the actual count
+      stopped_at[i] <- items_count
+      # Calculate classification if not set
+      if (length(responses) > 0) {
+        total_score <- sum(responses)
+        classifications[i] <- ifelse(total_score >= cutoff, 1, 0)
       }
     }
   }
@@ -553,11 +694,17 @@ reduce_sc_ep <- function(ordered_items, data, config, method_params, cutoff,
     )
   }
   
+  # VERIFICATION: Check that stopped_at matches n_items_used
+  n_items_used <- rowSums(items_administered)
+  if (!all(stopped_at == n_items_used)) {
+    warning("Mismatch between stopped_at and n_items_used detected!")
+  }
+  
   result <- list(
     items_administered = items_administered,
     classifications = classifications,
     stopped_at = stopped_at,
-    n_items_used = rowSums(items_administered),
+    n_items_used = n_items_used,
     method_info = list(
       description = "Stochastic curtailment using empirical conditional probabilities",
       gamma_0 = gamma_0,
@@ -1447,7 +1594,151 @@ reduce_dc_integrated <- function(ordered_items, data, config, method_params, cut
   return(result)
 }
 
-#' Stochastic Curtailment - Empirical Proportions with Integrated Triggered Construct Logic
+#' #' Stochastic Curtailment - Empirical Proportions with Integrated Triggered Construct Logic
+#' reduce_sc_ep_integrated <- function(ordered_items, data, config, method_params, cutoff, 
+#'                                     training_params, stop_low_only, min_items_per_construct,
+#'                                     complete_triggered_constructs, triggered_constructs, construct_name) {
+#'   
+#'   # Extract gamma parameters
+#'   gamma_0 <- method_params$gamma_0 %||% 0.95
+#'   gamma_1 <- method_params$gamma_1 %||% 0.95
+#'   
+#'   n_respondents <- nrow(data)
+#'   n_items <- length(ordered_items)
+#'   
+#'   # Initialize results
+#'   items_administered <- matrix(FALSE, nrow = n_respondents, ncol = n_items)
+#'   colnames(items_administered) <- ordered_items
+#'   stopped_at <- numeric(n_respondents)
+#'   classifications <- numeric(n_respondents)
+#'   
+#'   # Build or use lookup tables
+#'   if (!is.null(training_params)) {
+#'     lookup_tables <- training_params$lookup_tables
+#'   } else {
+#'     # Build empirical probability tables from training data
+#'     lookup_tables <- build_empirical_tables(data, ordered_items, config, cutoff)
+#'   }
+#'   
+#'   # Process each respondent
+#'   for (i in seq_len(n_respondents)) {
+#'     responses <- numeric()
+#'     items_given <- character()
+#'     construct_triggered <- construct_name %in% triggered_constructs[[i]]
+#'     
+#'     for (j in seq_along(ordered_items)) {
+#'       item <- ordered_items[j]
+#'       
+#'       # If construct is triggered, must administer all items
+#'       if (construct_triggered) {
+#'         items_administered[i, j] <- TRUE
+#'         items_given <- c(items_given, item)
+#'         if (item %in% names(data) && !is.na(data[i, item])) {
+#'           responses <- c(responses, data[i, item])
+#'         }
+#'         # Continue to next item without checking stopping criteria
+#'         next
+#'       }
+#'       
+#'       # Check construct constraints
+#'       if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
+#'         items_administered[i, j] <- TRUE
+#'         items_given <- c(items_given, item)
+#'         if (item %in% names(data) && !is.na(data[i, item])) {
+#'           responses <- c(responses, data[i, item])
+#'         }
+#'         next
+#'       }
+#'       
+#'       # Administer item
+#'       items_administered[i, j] <- TRUE
+#'       items_given <- c(items_given, item)
+#'       
+#'       if (item %in% names(data) && !is.na(data[i, item])) {
+#'         responses <- c(responses, data[i, item])
+#'       }
+#'       
+#'       # Look up conditional probabilities
+#'       response_pattern <- paste(responses, collapse = "_")
+#'       
+#'       if (response_pattern %in% names(lookup_tables[[j]])) {
+#'         probs <- lookup_tables[[j]][[response_pattern]]
+#'         prob_low <- probs["prob_low"]
+#'         prob_high <- probs["prob_high"]
+#'         
+#'         # Check stopping criteria
+#'         if (prob_low >= gamma_0) {
+#'           classifications[i] <- 0
+#'           stopped_at[i] <- j
+#'           break
+#'         } else if (prob_high >= gamma_1) {
+#'           # # DEBUG
+#'           # if (exists("DEBUG_CURTAILMENT") && DEBUG_CURTAILMENT && i <= 3) {
+#'           #   cat("  Respondent", i, "item", j, ": prob_high=", prob_high, 
+#'           #       ">=", gamma_1, "construct=", construct_name, "\n")
+#'           #   cat("    complete_triggered_constructs=", complete_triggered_constructs,
+#'           #       "stop_low_only=", stop_low_only, "\n")
+#'           # }
+#'           
+#'           if (complete_triggered_constructs) {
+#'             # Mark this construct as triggered
+#'             triggered_constructs[[i]] <- unique(c(triggered_constructs[[i]], construct_name))
+#'             construct_triggered <- TRUE
+#'             # Continue administering all remaining items for this construct
+#'           } else if (!stop_low_only) {
+#'             classifications[i] <- 1
+#'             stopped_at[i] <- j
+#'             break
+#'           }
+#'         }
+#'       }
+#'       
+#'       # If we've reached the end
+#'       if (j == n_items) {
+#'         total_score <- sum(responses)
+#'         classifications[i] <- ifelse(total_score >= cutoff, 1, 0)
+#'         stopped_at[i] <- j
+#'       }
+#'     }
+#'     
+#'     # If we finished all items (either naturally or due to triggering)
+#'     if (stopped_at[i] == 0) {
+#'       total_score <- sum(responses)
+#'       classifications[i] <- ifelse(total_score >= cutoff, 1, 0)
+#'       stopped_at[i] <- sum(items_administered[i, ])
+#'     }
+#'   }
+#'   
+#'   # Store training parameters
+#'   if (is.null(training_params)) {
+#'     training_params <- list(
+#'       lookup_tables = lookup_tables,
+#'       cutoff = cutoff,
+#'       gamma_0 = gamma_0,
+#'       gamma_1 = gamma_1
+#'     )
+#'   }
+#'   
+#'   result <- list(
+#'     items_administered = items_administered,
+#'     classifications = classifications,
+#'     stopped_at = stopped_at,
+#'     n_items_used = rowSums(items_administered),
+#'     triggered_constructs = triggered_constructs,
+#'     method_info = list(
+#'       description = "Stochastic curtailment (EP) with integrated triggered construct logic",
+#'       gamma_0 = gamma_0,
+#'       gamma_1 = gamma_1,
+#'       stop_low_only = stop_low_only,
+#'       complete_triggered_constructs = complete_triggered_constructs
+#'     ),
+#'     training_params = training_params
+#'   )
+#'   
+#'   return(result)
+#' }
+
+#' Stochastic Curtailment - Empirical Proportions with Integrated Triggered Construct Logic (CORRECTED)
 reduce_sc_ep_integrated <- function(ordered_items, data, config, method_params, cutoff, 
                                     training_params, stop_low_only, min_items_per_construct,
                                     complete_triggered_constructs, triggered_constructs, construct_name) {
@@ -1462,7 +1753,7 @@ reduce_sc_ep_integrated <- function(ordered_items, data, config, method_params, 
   # Initialize results
   items_administered <- matrix(FALSE, nrow = n_respondents, ncol = n_items)
   colnames(items_administered) <- ordered_items
-  stopped_at <- numeric(n_respondents)
+  stopped_at <- numeric(n_respondents)  # Initialized to zeros
   classifications <- numeric(n_respondents)
   
   # Build or use lookup tables
@@ -1477,7 +1768,9 @@ reduce_sc_ep_integrated <- function(ordered_items, data, config, method_params, 
   for (i in seq_len(n_respondents)) {
     responses <- numeric()
     items_given <- character()
+    items_count <- 0  # EXPLICIT COUNTER for items administered
     construct_triggered <- construct_name %in% triggered_constructs[[i]]
+    early_stopped <- FALSE  # Track if we stopped early
     
     for (j in seq_along(ordered_items)) {
       item <- ordered_items[j]
@@ -1486,6 +1779,8 @@ reduce_sc_ep_integrated <- function(ordered_items, data, config, method_params, 
       if (construct_triggered) {
         items_administered[i, j] <- TRUE
         items_given <- c(items_given, item)
+        items_count <- items_count + 1  # INCREMENT COUNTER
+        
         if (item %in% names(data) && !is.na(data[i, item])) {
           responses <- c(responses, data[i, item])
         }
@@ -1497,21 +1792,26 @@ reduce_sc_ep_integrated <- function(ordered_items, data, config, method_params, 
       if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
         items_administered[i, j] <- TRUE
         items_given <- c(items_given, item)
+        items_count <- items_count + 1  # INCREMENT COUNTER
+        
         if (item %in% names(data) && !is.na(data[i, item])) {
           responses <- c(responses, data[i, item])
         }
         next
       }
       
-      # Administer item
+      # Administer item j
       items_administered[i, j] <- TRUE
       items_given <- c(items_given, item)
+      items_count <- items_count + 1  # INCREMENT COUNTER
       
       if (item %in% names(data) && !is.na(data[i, item])) {
         responses <- c(responses, data[i, item])
       }
       
-      # Look up conditional probabilities
+      # After administering item j, check if we should stop
+      
+      # Look up conditional probabilities for pattern of length j
       response_pattern <- paste(responses, collapse = "_")
       
       if (response_pattern %in% names(lookup_tables[[j]])) {
@@ -1521,44 +1821,43 @@ reduce_sc_ep_integrated <- function(ordered_items, data, config, method_params, 
         
         # Check stopping criteria
         if (prob_low >= gamma_0) {
+          # Low-risk classification - stop here
           classifications[i] <- 0
-          stopped_at[i] <- j
+          stopped_at[i] <- items_count  # Use explicit counter
+          early_stopped <- TRUE
           break
         } else if (prob_high >= gamma_1) {
-          # # DEBUG
-          # if (exists("DEBUG_CURTAILMENT") && DEBUG_CURTAILMENT && i <= 3) {
-          #   cat("  Respondent", i, "item", j, ": prob_high=", prob_high, 
-          #       ">=", gamma_1, "construct=", construct_name, "\n")
-          #   cat("    complete_triggered_constructs=", complete_triggered_constructs,
-          #       "stop_low_only=", stop_low_only, "\n")
-          # }
-          
           if (complete_triggered_constructs) {
             # Mark this construct as triggered
             triggered_constructs[[i]] <- unique(c(triggered_constructs[[i]], construct_name))
             construct_triggered <- TRUE
             # Continue administering all remaining items for this construct
           } else if (!stop_low_only) {
+            # High-risk classification - stop here
             classifications[i] <- 1
-            stopped_at[i] <- j
+            stopped_at[i] <- items_count  # Use explicit counter
+            early_stopped <- TRUE
             break
           }
         }
       }
       
-      # If we've reached the end
-      if (j == n_items) {
+      # If we've reached the last item
+      if (j == n_items && !early_stopped) {
         total_score <- sum(responses)
         classifications[i] <- ifelse(total_score >= cutoff, 1, 0)
-        stopped_at[i] <- j
+        stopped_at[i] <- items_count  # Use explicit counter
       }
     }
     
-    # If we finished all items (either naturally or due to triggering)
+    # Handle case where all items were administered (e.g., due to triggering)
+    # but we never explicitly set stopped_at
     if (stopped_at[i] == 0) {
-      total_score <- sum(responses)
-      classifications[i] <- ifelse(total_score >= cutoff, 1, 0)
-      stopped_at[i] <- sum(items_administered[i, ])
+      stopped_at[i] <- items_count  # Use the actual count
+      if (length(responses) > 0) {
+        total_score <- sum(responses)
+        classifications[i] <- ifelse(total_score >= cutoff, 1, 0)
+      }
     }
   }
   
@@ -1572,11 +1871,17 @@ reduce_sc_ep_integrated <- function(ordered_items, data, config, method_params, 
     )
   }
   
+  # VERIFICATION: Check that stopped_at matches n_items_used
+  n_items_used <- rowSums(items_administered)
+  if (!all(stopped_at == n_items_used)) {
+    warning("Mismatch between stopped_at and n_items_used detected in integrated version!")
+  }
+  
   result <- list(
     items_administered = items_administered,
     classifications = classifications,
     stopped_at = stopped_at,
-    n_items_used = rowSums(items_administered),
+    n_items_used = n_items_used,
     triggered_constructs = triggered_constructs,
     method_info = list(
       description = "Stochastic curtailment (EP) with integrated triggered construct logic",
