@@ -138,6 +138,435 @@ validate_item_definitions <- function(item_definitions, ordered_items) {
   return(validation_results)
 }
 
+#####
+
+# ============================================================================
+# Module 7 Enhancement: Tracking Variable Implementation for SC-EP
+# ============================================================================
+# Purpose: Replace complex pattern enumeration with tracking variables that
+#          exactly match Module 6's stopping logic
+# ============================================================================
+
+#' Generate SurveyJS JSON with Tracking Variables (MAIN FUNCTION)
+#'
+#' This replaces the pattern enumeration approach with cleaner tracking variables
+#' 
+#' @param method_results Method results from optimization
+#' @param prepared_data Prepared data
+#' @param boundary_tables Boundary tables (kept for compatibility)
+#' @param admin_sequence Administration sequence
+#' @param item_definitions Item definitions
+#' @param survey_config Survey configuration
+#' @param pattern_rules Pattern rules from Module 7
+#' @param output_dir Output directory
+#' @return SurveyJS configuration with tracking variables
+generate_surveyjs_json_with_tracking <- function(method_results, prepared_data, boundary_tables,
+                                                 admin_sequence, item_definitions, survey_config,
+                                                 pattern_rules = NULL, output_dir) {
+  
+  # Initialize survey structure
+  survey <- list(
+    title = survey_config$title,
+    description = survey_config$description,
+    pages = list(),
+    calculatedValues = list()  # For tracking variables
+  )
+  
+  # Get method details
+  reduction_method <- method_results$combination$reduction
+  stop_low_only <- method_results$reduction_result$constraints_applied$stop_low_only %||% FALSE
+  use_tracking <- !is.null(pattern_rules) && reduction_method == "sc_ep"
+  
+  # Extract training parameters for Module 6 logic matching
+  training_params <- method_results$reduction_result$training_params
+  
+  # Process based on questionnaire type
+  if (prepared_data$config$questionnaire_type == "unidimensional") {
+    # Single construct case
+    if (use_tracking) {
+      survey <- generate_unidimensional_with_tracking(
+        survey, admin_sequence, pattern_rules[["total"]], 
+        item_definitions, survey_config, training_params,
+        method_results$combination$gamma_0,
+        method_results$combination$gamma_1,
+        stop_low_only
+      )
+    }
+  } else {
+    # Multi-construct case
+    if (use_tracking) {
+      survey <- generate_multi_construct_with_tracking(
+        survey, admin_sequence, pattern_rules, item_definitions,
+        survey_config, prepared_data$config, method_results,
+        training_params, stop_low_only
+      )
+    }
+  }
+  
+  # Add completion page
+  survey$pages[[length(survey$pages) + 1]] <- list(
+    name = "completion",
+    elements = list(
+      list(
+        type = "html",
+        name = "completion_message",
+        html = "<h3>Thank you for completing the assessment</h3>"
+      )
+    )
+  )
+  
+  # Add survey-level settings
+  survey$questionErrorLocation = "bottom"
+  survey$showProgressBar = TRUE
+  survey$progressBarType = "questions"
+  survey$widthMode = "responsive"
+  
+  # Convert to JSON
+  if (requireNamespace("jsonlite", quietly = TRUE)) {
+    json_output <- jsonlite::toJSON(survey, pretty = TRUE, auto_unbox = TRUE)
+    writeLines(json_output, file.path(output_dir, "surveyjs_config_tracking.json"))
+  }
+  
+  return(survey)
+}
+
+#' Generate Multi-Construct Survey with Tracking Variables
+#'
+#' @param survey Survey object
+#' @param admin_sequence Administration sequence
+#' @param pattern_rules Pattern rules by construct
+#' @param item_definitions Item definitions
+#' @param survey_config Survey configuration
+#' @param data_config Data configuration
+#' @param method_results Method results
+#' @param training_params Training parameters from Module 6
+#' @param stop_low_only Whether only low-risk stopping is allowed
+#' @return Updated survey object
+generate_multi_construct_with_tracking <- function(survey, admin_sequence, pattern_rules,
+                                                   item_definitions, survey_config,
+                                                   data_config, method_results,
+                                                   training_params, stop_low_only) {
+  
+  # Get construct-specific gammas (from optimization)
+  construct_gammas <- method_results$combination$construct_gammas
+  
+  # Get min items constraint
+  min_items_per_construct <- method_results$reduction_result$constraints_applied$min_items_per_construct %||% 0
+  
+  # Initialize calculated values for each construct's stopping status
+  for (cn in names(data_config$constructs)) {
+    # Get construct-specific parameters
+    gamma_0 <- construct_gammas[[cn]]$gamma_0
+    gamma_1 <- construct_gammas[[cn]]$gamma_1
+    
+    # Get construct-specific training params (lookup tables)
+    construct_training <- if (is.list(training_params) && cn %in% names(training_params)) {
+      training_params[[cn]]
+    } else {
+      training_params
+    }
+    
+    # Create calculated value that checks if construct should stop
+    calc_value <- list(
+      name = paste0(cn, "_stopped"),
+      expression = generate_module6_stop_logic(
+        construct_name = cn,
+        construct_items = data_config$constructs[[cn]],
+        lookup_tables = construct_training$lookup_tables,
+        gamma_0 = gamma_0,
+        gamma_1 = gamma_1,
+        stop_low_only = stop_low_only,
+        min_items = min_items_per_construct
+      )
+    )
+    survey$calculatedValues[[length(survey$calculatedValues) + 1]] <- calc_value
+  }
+  
+  # Track items seen by construct
+  construct_items_seen <- list()
+  for (cn in names(data_config$constructs)) {
+    construct_items_seen[[cn]] <- character()
+  }
+  
+  # Create pages for each item
+  for (i in 1:nrow(admin_sequence)) {
+    item_id <- admin_sequence$item_id[i]
+    original_pos <- admin_sequence$original_position[i]
+    item_construct <- admin_sequence$construct[i]
+    
+    # Track this item
+    construct_items_seen[[item_construct]] <- c(construct_items_seen[[item_construct]], item_id)
+    within_construct_pos <- length(construct_items_seen[[item_construct]])
+    
+    # Create page
+    page <- list(
+      name = as.character(original_pos),
+      elements = list()
+    )
+    
+    # Create question
+    question <- list(
+      type = "rating",
+      name = item_id,
+      title = item_definitions[[item_id]]$item_text,
+      rateValues = item_definitions[[item_id]]$rateValues,
+      displayMode = survey_config$displayMode %||% "buttons",
+      autoGenerate = survey_config$autoGenerate %||% FALSE
+    )
+    
+    # Set visibility based on tracking variable
+    tracking_var <- paste0(item_construct, "_stopped")
+    
+    # First item or mandatory items are always visible
+    if (i == 1 || (min_items_per_construct > 0 && within_construct_pos <= min_items_per_construct)) {
+      question$isRequired <- TRUE
+    } else {
+      # Use tracking variable for visibility
+      # Item is visible if construct has NOT stopped
+      question$visibleIf <- paste0("!{", tracking_var, "}")
+      question$requiredIf <- paste0("!{", tracking_var, "}")
+    }
+    
+    page$elements[[1]] <- question
+    survey$pages[[length(survey$pages) + 1]] <- page
+  }
+  
+  return(survey)
+}
+
+#' Generate Module 6 Stop Logic Expression
+#'
+#' Creates a SurveyJS expression that exactly matches Module 6's stopping logic
+#' using the lookup tables and gamma thresholds
+#'
+#' @param construct_name Name of construct
+#' @param construct_items Items in this construct
+#' @param lookup_tables Lookup tables from training (Module 6)
+#' @param gamma_0 Low-risk threshold
+#' @param gamma_1 High-risk threshold
+#' @param stop_low_only Whether only low-risk stopping is allowed
+#' @param min_items Minimum items required
+#' @return SurveyJS expression string
+generate_module6_stop_logic <- function(construct_name, construct_items, lookup_tables,
+                                        gamma_0, gamma_1, stop_low_only, min_items = 0) {
+  
+  if (is.null(lookup_tables)) {
+    return("false")  # No stopping without lookup tables
+  }
+  
+  # Build expressions for each position
+  position_expressions <- character()
+  
+  for (k in seq_along(lookup_tables)) {
+    if (k <= min_items) next  # Skip positions within minimum items
+    if (is.null(lookup_tables[[k]])) next
+    
+    items_at_k <- construct_items[1:k]
+    
+    # First check that all k items have been answered
+    answered_check <- paste0("(",
+                             paste(sapply(items_at_k, function(x) 
+                               paste0("!isEmpty({", x, "})")), 
+                               collapse = " and "),
+                             ")")
+    
+    # Get patterns that trigger stopping at position k
+    stop_patterns <- get_stop_patterns_module6_logic(
+      lookup_table_k = lookup_tables[[k]],
+      gamma_0 = gamma_0,
+      gamma_1 = gamma_1,
+      stop_low_only = stop_low_only
+    )
+    
+    if (length(stop_patterns) > 0) {
+      # Build conditions for each stop pattern
+      pattern_conditions <- character()
+      
+      for (pattern_str in stop_patterns) {
+        scores <- as.numeric(strsplit(pattern_str, "_")[[1]])
+        
+        # Build condition: all items match this pattern
+        pattern_check <- paste0("(",
+                                paste(sapply(1:k, function(j) 
+                                  paste0("{", items_at_k[j], "} = ", scores[j])),
+                                  collapse = " and "),
+                                ")")
+        pattern_conditions <- c(pattern_conditions, pattern_check)
+      }
+      
+      # Combine: k items answered AND any stop pattern matches
+      position_stop <- paste0("(", answered_check, " and (",
+                              paste(pattern_conditions, collapse = " or "), "))")
+      position_expressions <- c(position_expressions, position_stop)
+    }
+  }
+  
+  # Return true if ANY position triggers stop
+  if (length(position_expressions) > 0) {
+    return(paste0("(", paste(position_expressions, collapse = " or "), ")"))
+  } else {
+    return("false")
+  }
+}
+
+#' Get Stop Patterns Using Module 6 Logic
+#'
+#' Determines which patterns trigger stopping based on Module 6's exact logic
+#'
+#' @param lookup_table_k Lookup table for position k
+#' @param gamma_0 Low-risk threshold
+#' @param gamma_1 High-risk threshold  
+#' @param stop_low_only Whether only low-risk stopping is allowed
+#' @return Vector of pattern strings that trigger stopping
+get_stop_patterns_module6_logic <- function(lookup_table_k, gamma_0, gamma_1, stop_low_only) {
+  
+  stop_patterns <- character()
+  
+  for (pattern_str in names(lookup_table_k)) {
+    probs <- lookup_table_k[[pattern_str]]
+    prob_low <- probs["prob_low"]
+    prob_high <- probs["prob_high"]
+    
+    # Module 6 logic: Check if pattern meets gamma thresholds
+    # Low-risk stop: P(low) >= gamma_0
+    if (!is.na(prob_low) && prob_low >= gamma_0) {
+      stop_patterns <- c(stop_patterns, pattern_str)
+    }
+    # High-risk stop: P(high) >= gamma_1 (if not stop_low_only)
+    else if (!stop_low_only && !is.na(prob_high) && prob_high >= gamma_1) {
+      stop_patterns <- c(stop_patterns, pattern_str)
+    }
+    # Neutral patterns: Continue (don't add to stop_patterns)
+  }
+  
+  return(stop_patterns)
+}
+
+#' #' Validate Tracking Logic Against Module 6
+#' #'
+#' #' Helper function to verify the tracking logic matches Module 6's simulation
+#' #'
+#' #' @param tracking_expression SurveyJS expression for tracking
+#' #' @param test_responses Test response patterns
+#' #' @param module6_result Expected result from Module 6
+#' #' @return Validation results
+#' validate_tracking_against_module6 <- function(tracking_expression, test_responses, module6_result) {
+#'   
+#'   # Parse the tracking expression and evaluate it for test responses
+#'   # This would require a JavaScript evaluator or manual parsing
+#'   
+#'   # For now, return structure for validation
+#'   return(list(
+#'     expression = tracking_expression,
+#'     test_count = length(test_responses),
+#'     matches_module6 = NA,  # Would be populated by actual evaluation
+#'     message = "Validation requires JavaScript evaluation engine"
+#'   ))
+#' }
+
+#' Generate Debug Report for Tracking Variables
+#'
+#' Creates a detailed report showing how patterns map to stop decisions
+#'
+#' @param pattern_rules Pattern rules from Module 7
+#' @param training_params Training params from Module 6
+#' @param construct_gammas Construct-specific gamma values
+#' @param output_dir Output directory
+generate_tracking_debug_report <- function(pattern_rules, training_params, 
+                                           construct_gammas, output_dir) {
+  
+  report_file <- file.path(output_dir, "tracking_variable_debug.txt")
+  
+  report_text <- paste0(
+    "TRACKING VARIABLE DEBUG REPORT\n",
+    "==============================\n",
+    "Generated: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n\n"
+  )
+  
+  for (cn in names(pattern_rules)) {
+    if (is.null(pattern_rules[[cn]])) next
+    
+    gamma_0 <- construct_gammas[[cn]]$gamma_0
+    gamma_1 <- construct_gammas[[cn]]$gamma_1
+    
+    report_text <- paste0(report_text,
+                          "Construct: ", cn, "\n",
+                          "Gamma_0: ", gamma_0, ", Gamma_1: ", gamma_1, "\n",
+                          "-------------------------------\n")
+    
+    # Get training params for this construct
+    construct_training <- if (is.list(training_params) && cn %in% names(training_params)) {
+      training_params[[cn]]
+    } else {
+      training_params
+    }
+    
+    if (!is.null(construct_training$lookup_tables)) {
+      for (k in seq_along(construct_training$lookup_tables)) {
+        if (is.null(construct_training$lookup_tables[[k]])) next
+        
+        lookup_k <- construct_training$lookup_tables[[k]]
+        
+        # Classify patterns using Module 6 logic
+        stop_patterns <- get_stop_patterns_module6_logic(
+          lookup_k, gamma_0, gamma_1, stop_low_only = FALSE
+        )
+        
+        continue_patterns <- setdiff(names(lookup_k), stop_patterns)
+        
+        report_text <- paste0(report_text,
+                              "  Position ", k, ":\n",
+                              "    Stop patterns: ", length(stop_patterns), "\n",
+                              "    Continue patterns: ", length(continue_patterns), "\n")
+        
+        # Show a few examples
+        if (length(stop_patterns) > 0) {
+          examples <- head(stop_patterns, 3)
+          for (ex in examples) {
+            probs <- lookup_k[[ex]]
+            report_text <- paste0(report_text,
+                                  "      Stop: ", ex, 
+                                  " (P_low=", sprintf("%.3f", probs["prob_low"]),
+                                  ", P_high=", sprintf("%.3f", probs["prob_high"]), ")\n")
+          }
+        }
+        
+        if (length(continue_patterns) > 0) {
+          examples <- head(continue_patterns, 3)
+          for (ex in examples) {
+            probs <- lookup_k[[ex]]
+            report_text <- paste0(report_text,
+                                  "      Continue: ", ex,
+                                  " (P_low=", sprintf("%.3f", probs["prob_low"]),
+                                  ", P_high=", sprintf("%.3f", probs["prob_high"]), ")\n")
+          }
+        }
+      }
+    }
+    
+    report_text <- paste0(report_text, "\n")
+  }
+  
+  writeLines(report_text, report_file)
+}
+
+#' #' Update Module 7 Deployment Generation
+#' #'
+#' #' This is the main update to Module 7's generate_deployment_package
+#' #' to use tracking variables instead of pattern enumeration
+#' update_deployment_for_tracking <- function(deployment_function) {
+#'   # Modify the existing generate_deployment_package to use
+#'   # generate_surveyjs_json_with_tracking instead of 
+#'   # the original generate_surveyjs_json
+#'   
+#'   # This would be implemented as a patch to the existing function
+#'   # or as a new parameter use_tracking_variables = TRUE
+#'   
+#'   return(deployment_function)
+#' }
+
+#####
+
 #' Generate Deployment Package (ENHANCED)
 #'
 #' @param evaluation_results Results from Module 5 evaluation (optional if optimization_results provided)
@@ -302,18 +731,47 @@ generate_deployment_package <- function(
     output_dir
   )
   
+  # # Generate SurveyJS JSON (with pattern support if applicable)
+  # cat("  Generating SurveyJS JSON...\n")
+  # surveyjs_json <- generate_surveyjs_json(
+  #   method_results,
+  #   prepared_data,
+  #   boundary_tables,
+  #   admin_sequence,
+  #   item_definitions,
+  #   survey_config,
+  #   pattern_rules,  # Pass pattern rules if available
+  #   output_dir
+  # )
+  
   # Generate SurveyJS JSON (with pattern support if applicable)
   cat("  Generating SurveyJS JSON...\n")
-  surveyjs_json <- generate_surveyjs_json(
-    method_results,
-    prepared_data,
-    boundary_tables,
-    admin_sequence,
-    item_definitions,
-    survey_config,
-    pattern_rules,  # Pass pattern rules if available
-    output_dir
-  )
+  
+  # Use tracking variables for SC-EP with patterns
+  if (reduction_method == "sc_ep" && !is.null(pattern_rules)) {
+    cat("    Using tracking variable approach for SC-EP...\n")
+    surveyjs_json <- generate_surveyjs_json_with_tracking(
+      method_results,
+      prepared_data,
+      boundary_tables,
+      admin_sequence,
+      item_definitions,
+      survey_config,
+      pattern_rules,
+      output_dir
+    )
+  } else {
+    surveyjs_json <- generate_surveyjs_json(
+      method_results,
+      prepared_data,
+      boundary_tables,
+      admin_sequence,
+      item_definitions,
+      survey_config,
+      pattern_rules,
+      output_dir
+    )
+  }
   
   # Save implementation parameters
   cat("  Saving implementation parameters...\n")
