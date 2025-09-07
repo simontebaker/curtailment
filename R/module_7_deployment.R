@@ -294,9 +294,323 @@ generate_surveyjs_json_with_tracking_fixed <- function(method_results, prepared_
   return(survey)
 }
 
-#' Generate Working SurveyJS JSON with Survey-Level Triggers
-#'
-#' This actually works in SurveyJS
+#' #' Generate Working SurveyJS JSON with Survey-Level Triggers
+#' #'
+#' #' This actually works in SurveyJS
+#' generate_surveyjs_json_working <- function(method_results, prepared_data, boundary_tables,
+#'                                            admin_sequence, item_definitions, survey_config,
+#'                                            pattern_rules = NULL, output_dir) {
+#'   
+#'   # Initialize survey structure
+#'   survey <- list(
+#'     title = survey_config$title,
+#'     description = survey_config$description,
+#'     pages = list(),
+#'     triggers = list()  # Survey-level triggers (these actually work!)
+#'   )
+#'   
+#'   # Get method details
+#'   reduction_method <- method_results$combination$reduction
+#'   stop_low_only <- method_results$reduction_result$constraints_applied$stop_low_only %||% FALSE
+#'   training_params <- method_results$reduction_result$training_params
+#'   
+#'   if (prepared_data$config$questionnaire_type == "multi-construct" && 
+#'       !is.null(pattern_rules) && reduction_method == "sc_ep") {
+#'     
+#'     # Get construct gammas
+#'     construct_gammas <- method_results$combination$construct_gammas
+#'     min_items_per_construct <- method_results$reduction_result$constraints_applied$min_items_per_construct %||% 0
+#'     
+#'     # Track items by construct
+#'     construct_items_seen <- list()
+#'     for (cn in names(prepared_data$config$constructs)) {
+#'       construct_items_seen[[cn]] <- character()
+#'     }
+#'     
+#'     # Create pages for each item
+#'     for (i in 1:nrow(admin_sequence)) {
+#'       item_id <- admin_sequence$item_id[i]
+#'       original_pos <- admin_sequence$original_position[i]
+#'       item_construct <- admin_sequence$construct[i]
+#'       
+#'       # Track this item
+#'       construct_items_seen[[item_construct]] <- c(construct_items_seen[[item_construct]], item_id)
+#'       within_construct_pos <- length(construct_items_seen[[item_construct]])
+#'       
+#'       # Create page
+#'       page <- list(
+#'         name = as.character(original_pos),
+#'         elements = list()
+#'       )
+#'       
+#'       # Create question
+#'       question <- list(
+#'         type = "rating",
+#'         name = item_id,
+#'         title = item_definitions[[item_id]]$item_text,
+#'         rateValues = item_definitions[[item_id]]$rateValues,
+#'         displayMode = survey_config$displayMode %||% "buttons",
+#'         autoGenerate = survey_config$autoGenerate %||% FALSE
+#'       )
+#'       
+#'       # Set visibility based on calculated value
+#'       tracking_var <- paste0(item_construct, "_should_stop")
+#'       
+#'       if (i == 1 || (min_items_per_construct > 0 && within_construct_pos <= min_items_per_construct)) {
+#'         question$isRequired <- TRUE
+#'       } else {
+#'         # Use calculated value for visibility
+#'         question$visibleIf <- paste0("{", tracking_var, "} != true") # question$visibleIf <- paste0("!", tracking_var)
+#'         question$requiredIf <- paste0("{", tracking_var, "} != true") # question$requiredIf <- paste0("!", tracking_var)
+#'       }
+#'       
+#'       page$elements[[1]] <- question
+#'       survey$pages[[length(survey$pages) + 1]] <- page
+#'       
+#'       # ADD SURVEY-LEVEL TRIGGER for this item (these actually work!)
+#'       if (within_construct_pos >= 2 && within_construct_pos > min_items_per_construct) {
+#'         
+#'         gamma_0 <- construct_gammas[[item_construct]]$gamma_0
+#'         gamma_1 <- construct_gammas[[item_construct]]$gamma_1
+#'         
+#'         construct_training <- if (is.list(training_params) && item_construct %in% names(training_params)) {
+#'           training_params[[item_construct]]
+#'         } else {
+#'           training_params
+#'         }
+#'         
+#'         # Generate stop patterns for this position
+#'         stop_expression <- generate_position_stop_patterns(
+#'           construct_items = construct_items_seen[[item_construct]],
+#'           position = within_construct_pos,
+#'           lookup_tables = construct_training$lookup_tables,
+#'           gamma_0 = gamma_0,
+#'           gamma_1 = gamma_1,
+#'           stop_low_only = stop_low_only
+#'         )
+#'         
+#'         if (length(stop_expression$patterns) > 0) {
+#'           # Create a trigger for EACH stop pattern (SurveyJS evaluates them all)
+#'           for (pattern_info in stop_expression$patterns) {
+#'             trigger <- list(
+#'               type = "setvalue",
+#'               expression = pattern_info$condition,
+#'               setToName = tracking_var,
+#'               setValue = TRUE
+#'             )
+#'             survey$triggers[[length(survey$triggers) + 1]] <- trigger
+#'           }
+#'         }
+#'       }
+#'     }
+#'     
+#'     # Initialize calculated values for tracking variables
+#'     survey$calculatedValues <- list()
+#'     for (cn in names(prepared_data$config$constructs)) {
+#'       calc_val <- list(
+#'         name = paste0(cn, "_should_stop"),
+#'         expression = "false"  # Default to not stopped
+#'       )
+#'       survey$calculatedValues[[length(survey$calculatedValues) + 1]] <- calc_val
+#'     }
+#'   }
+#'   
+#'   # Add completion page
+#'   survey$pages[[length(survey$pages) + 1]] <- list(
+#'     name = "completion",
+#'     elements = list(
+#'       list(
+#'         type = "html",
+#'         name = "completion_message",
+#'         html = "<h3>Thank you for completing the assessment</h3>"
+#'       )
+#'     )
+#'   )
+#'   
+#'   # Survey settings
+#'   survey$showProgressBar <- TRUE
+#'   survey$progressBarType <- "questions"
+#'   
+#'   # Save JSON
+#'   if (requireNamespace("jsonlite", quietly = TRUE)) {
+#'     json_output <- jsonlite::toJSON(survey, pretty = TRUE, auto_unbox = TRUE)
+#'     writeLines(json_output, file.path(output_dir, "surveyjs_config_working.json"))
+#'   }
+#'   
+#'   return(survey)
+#' }
+
+# generate_surveyjs_json_working <- function(method_results, prepared_data, boundary_tables,
+#                                            admin_sequence, item_definitions, survey_config,
+#                                            pattern_rules = NULL, output_dir) {
+#   
+#   # Initialize survey structure
+#   survey <- list(
+#     title = survey_config$title,
+#     description = survey_config$description,
+#     calculatedValues = list(),  # Position-specific calculated values
+#     pages = list(),
+#     triggers = list(),
+#     goNextPageAutomatic = TRUE,
+#     showNavigationButtons = "bottom",
+#     clearInvisibleValues = "none"
+#   )
+#   
+#   # Get method details
+#   reduction_method <- method_results$combination$reduction
+#   stop_low_only <- method_results$reduction_result$constraints_applied$stop_low_only %||% FALSE
+#   training_params <- method_results$reduction_result$training_params
+#   
+#   if (prepared_data$config$questionnaire_type == "multi-construct" && 
+#       !is.null(pattern_rules) && reduction_method == "sc_ep") {
+#     
+#     # Get construct gammas
+#     construct_gammas <- method_results$combination$construct_gammas
+#     min_items_per_construct <- method_results$reduction_result$constraints_applied$min_items_per_constraint %||% 0
+#     
+#     # Track items by construct for creating calculated values
+#     construct_items_seen <- list()
+#     for (cn in names(prepared_data$config$constructs)) {
+#       construct_items_seen[[cn]] <- character()
+#     }
+#     
+#     # FIRST PASS: Create calculated values for each position
+#     for (i in 1:nrow(admin_sequence)) {
+#       item_construct <- admin_sequence$construct[i]
+#       construct_items_seen[[item_construct]] <- c(construct_items_seen[[item_construct]], admin_sequence$item_id[i])
+#       within_construct_pos <- length(construct_items_seen[[item_construct]])
+#       
+#       if (within_construct_pos > min_items_per_construct) {
+#         calc_val_name <- paste0(item_construct, "_stopped_at_position_", within_construct_pos)
+#         
+#         # Get stop patterns for this position
+#         gamma_0 <- construct_gammas[[item_construct]]$gamma_0
+#         gamma_1 <- construct_gammas[[item_construct]]$gamma_1
+#         
+#         construct_training <- if (is.list(training_params) && item_construct %in% names(training_params)) {
+#           training_params[[item_construct]]
+#         } else {
+#           training_params
+#         }
+#         
+#         stop_patterns <- generate_position_stop_patterns(
+#           construct_items = construct_items_seen[[item_construct]],
+#           position = within_construct_pos,
+#           lookup_tables = construct_training$lookup_tables,
+#           gamma_0 = gamma_0,
+#           gamma_1 = gamma_1,
+#           stop_low_only = stop_low_only
+#         )
+#         
+#         # Build expression: previous position stopped OR current patterns match
+#         expression_parts <- character()
+#         
+#         # Check if previous position stopped (cascade)
+#         if (within_construct_pos > 1 && within_construct_pos - 1 > min_items_per_construct) {
+#           prev_calc_name <- paste0(item_construct, "_stopped_at_position_", within_construct_pos - 1)
+#           expression_parts <- c(expression_parts, prev_calc_name)
+#         }
+#         
+#         # Add current position stop patterns
+#         if (length(stop_patterns$patterns) > 0) {
+#           pattern_conditions <- sapply(stop_patterns$patterns, function(p) p$condition)
+#           if (length(pattern_conditions) > 0) {
+#             pattern_expression <- paste0("(", paste(pattern_conditions, collapse = " or "), ")")
+#             expression_parts <- c(expression_parts, pattern_expression)
+#           }
+#         }
+#         
+#         # Combine with OR
+#         if (length(expression_parts) > 0) {
+#           final_expression <- paste(expression_parts, collapse = " or ")
+#         } else {
+#           final_expression <- "false"
+#         }
+#         
+#         calc_val <- list(
+#           name = calc_val_name,
+#           expression = final_expression
+#         )
+#         survey$calculatedValues[[length(survey$calculatedValues) + 1]] <- calc_val
+#       }
+#     }
+#     
+#     # SECOND PASS: Create pages with visibility conditions
+#     construct_items_seen <- list()
+#     for (cn in names(prepared_data$config$constructs)) {
+#       construct_items_seen[[cn]] <- character()
+#     }
+#     
+#     for (i in 1:nrow(admin_sequence)) {
+#       item_id <- admin_sequence$item_id[i]
+#       original_pos <- admin_sequence$original_position[i]
+#       item_construct <- admin_sequence$construct[i]
+#       
+#       construct_items_seen[[item_construct]] <- c(construct_items_seen[[item_construct]], item_id)
+#       within_construct_pos <- length(construct_items_seen[[item_construct]])
+#       
+#       # Create page
+#       page <- list(
+#         name = as.character(original_pos),
+#         elements = list()
+#       )
+#       
+#       # Create question
+#       question <- list(
+#         type = "rating",
+#         name = item_id,
+#         title = item_definitions[[item_id]]$item_text,
+#         rateValues = item_definitions[[item_id]]$rateValues,
+#         displayMode = survey_config$displayMode %||% "buttons",
+#         autoGenerate = survey_config$autoGenerate %||% FALSE
+#       )
+#       
+#       # Set visibility based on PREVIOUS position's stop status
+#       if (i == 1 || within_construct_pos <= min_items_per_construct) {
+#         question$isRequired <- TRUE
+#       } else {
+#         # Check if stopped at PREVIOUS position
+#         prev_position <- within_construct_pos - 1
+#         if (prev_position > min_items_per_construct) {
+#           prev_calc_name <- paste0(item_construct, "_stopped_at_position_", prev_position)
+#           question$visibleIf <- paste0("{", prev_calc_name, "} != true")
+#           question$requiredIf <- paste0("{", prev_calc_name, "} != true")
+#         } else {
+#           # Previous position was mandatory, so this item should be visible
+#           question$isRequired <- TRUE
+#         }
+#       }
+#       
+#       page$elements[[1]] <- question
+#       survey$pages[[length(survey$pages) + 1]] <- page
+#     }
+#   }
+#   
+#   # Add completion page
+#   survey$pages[[length(survey$pages) + 1]] <- list(
+#     name = "completion",
+#     elements = list(
+#       list(
+#         type = "html",
+#         name = "completion_message",
+#         html = "<h3>Thank you for completing the assessment</h3>"
+#       )
+#     )
+#   )
+#   
+#   # Survey settings
+#   survey$showProgressBar <- TRUE
+#   survey$progressBarType <- "questions"
+#   
+#   # Save JSON
+#   if (requireNamespace("jsonlite", quietly = TRUE)) {
+#     json_output <- jsonlite::toJSON(survey, pretty = TRUE, auto_unbox = TRUE)
+#     writeLines(json_output, file.path(output_dir, "surveyjs_config_working.json"))
+#   }
+#   
+#   return(survey)
+# }
+
 generate_surveyjs_json_working <- function(method_results, prepared_data, boundary_tables,
                                            admin_sequence, item_definitions, survey_config,
                                            pattern_rules = NULL, output_dir) {
@@ -305,8 +619,11 @@ generate_surveyjs_json_working <- function(method_results, prepared_data, bounda
   survey <- list(
     title = survey_config$title,
     description = survey_config$description,
+    calculatedValues = list(),
     pages = list(),
-    triggers = list()  # Survey-level triggers (these actually work!)
+    goNextPageAutomatic = TRUE,
+    showNavigationButtons = "bottom",
+    clearInvisibleValues = "none"
   )
   
   # Get method details
@@ -327,13 +644,78 @@ generate_surveyjs_json_working <- function(method_results, prepared_data, bounda
       construct_items_seen[[cn]] <- character()
     }
     
-    # Create pages for each item
+    # FIRST PASS: Create calculated values for EVERY position
+    for (i in 1:nrow(admin_sequence)) {
+      item_construct <- admin_sequence$construct[i]
+      construct_items_seen[[item_construct]] <- c(construct_items_seen[[item_construct]], admin_sequence$item_id[i])
+      within_construct_pos <- length(construct_items_seen[[item_construct]])
+      
+      # Create calculated value for this position (even if it's mandatory)
+      calc_val_name <- paste0(item_construct, "_stopped_at_position_", within_construct_pos)
+      
+      # Build expression
+      expression_parts <- character()
+      
+      # ALWAYS check if previous position stopped (for cascade to work)
+      if (within_construct_pos > 1) {
+        prev_calc_name <- paste0(item_construct, "_stopped_at_position_", within_construct_pos - 1)
+        expression_parts <- c(expression_parts, paste0("{", prev_calc_name, "}"))
+      }
+      
+      # Add stop patterns ONLY if this position can trigger stops
+      if (within_construct_pos > 1 && within_construct_pos > min_items_per_construct) {
+        gamma_0 <- construct_gammas[[item_construct]]$gamma_0
+        gamma_1 <- construct_gammas[[item_construct]]$gamma_1
+        
+        construct_training <- if (is.list(training_params) && item_construct %in% names(training_params)) {
+          training_params[[item_construct]]
+        } else {
+          training_params
+        }
+        
+        stop_patterns <- generate_position_stop_patterns(
+          construct_items = construct_items_seen[[item_construct]],
+          position = within_construct_pos,
+          lookup_tables = construct_training$lookup_tables,
+          gamma_0 = gamma_0,
+          gamma_1 = gamma_1,
+          stop_low_only = stop_low_only
+        )
+        
+        if (length(stop_patterns$patterns) > 0) {
+          pattern_conditions <- sapply(stop_patterns$patterns, function(p) p$condition)
+          if (length(pattern_conditions) > 0) {
+            pattern_expression <- paste0("(", paste(pattern_conditions, collapse = " or "), ")")
+            expression_parts <- c(expression_parts, pattern_expression)
+          }
+        }
+      }
+      
+      # Combine with OR
+      if (length(expression_parts) > 0) {
+        final_expression <- paste0("(", paste(expression_parts, collapse = ") or ("), ")")
+      } else {
+        final_expression <- "false"
+      }
+      
+      calc_val <- list(
+        name = calc_val_name,
+        expression = final_expression
+      )
+      survey$calculatedValues[[length(survey$calculatedValues) + 1]] <- calc_val
+    }
+    
+    # SECOND PASS: Create pages with visibility conditions
+    construct_items_seen <- list()
+    for (cn in names(prepared_data$config$constructs)) {
+      construct_items_seen[[cn]] <- character()
+    }
+    
     for (i in 1:nrow(admin_sequence)) {
       item_id <- admin_sequence$item_id[i]
       original_pos <- admin_sequence$original_position[i]
       item_construct <- admin_sequence$construct[i]
       
-      # Track this item
       construct_items_seen[[item_construct]] <- c(construct_items_seen[[item_construct]], item_id)
       within_construct_pos <- length(construct_items_seen[[item_construct]])
       
@@ -353,65 +735,19 @@ generate_surveyjs_json_working <- function(method_results, prepared_data, bounda
         autoGenerate = survey_config$autoGenerate %||% FALSE
       )
       
-      # Set visibility based on calculated value
-      tracking_var <- paste0(item_construct, "_should_stop")
-      
-      if (i == 1 || (min_items_per_construct > 0 && within_construct_pos <= min_items_per_construct)) {
+      # Set visibility
+      if (i == 1 || (within_construct_pos == 1) || 
+          (min_items_per_construct > 0 && within_construct_pos <= min_items_per_construct)) {
         question$isRequired <- TRUE
       } else {
-        # Use calculated value for visibility
-        question$visibleIf <- paste0("{", tracking_var, "} != true") # question$visibleIf <- paste0("!", tracking_var)
-        question$requiredIf <- paste0("{", tracking_var, "} != true") # question$requiredIf <- paste0("!", tracking_var)
+        # Check the PREVIOUS position's calculated value
+        prev_calc_name <- paste0(item_construct, "_stopped_at_position_", within_construct_pos - 1)
+        question$visibleIf <- paste0("{", prev_calc_name, "} = false")
+        question$requiredIf <- paste0("{", prev_calc_name, "} = false")
       }
       
       page$elements[[1]] <- question
       survey$pages[[length(survey$pages) + 1]] <- page
-      
-      # ADD SURVEY-LEVEL TRIGGER for this item (these actually work!)
-      if (within_construct_pos >= 2 && within_construct_pos > min_items_per_construct) {
-        
-        gamma_0 <- construct_gammas[[item_construct]]$gamma_0
-        gamma_1 <- construct_gammas[[item_construct]]$gamma_1
-        
-        construct_training <- if (is.list(training_params) && item_construct %in% names(training_params)) {
-          training_params[[item_construct]]
-        } else {
-          training_params
-        }
-        
-        # Generate stop patterns for this position
-        stop_expression <- generate_position_stop_patterns(
-          construct_items = construct_items_seen[[item_construct]],
-          position = within_construct_pos,
-          lookup_tables = construct_training$lookup_tables,
-          gamma_0 = gamma_0,
-          gamma_1 = gamma_1,
-          stop_low_only = stop_low_only
-        )
-        
-        if (length(stop_expression$patterns) > 0) {
-          # Create a trigger for EACH stop pattern (SurveyJS evaluates them all)
-          for (pattern_info in stop_expression$patterns) {
-            trigger <- list(
-              type = "setvalue",
-              expression = pattern_info$condition,
-              setToName = tracking_var,
-              setValue = TRUE
-            )
-            survey$triggers[[length(survey$triggers) + 1]] <- trigger
-          }
-        }
-      }
-    }
-    
-    # Initialize calculated values for tracking variables
-    survey$calculatedValues <- list()
-    for (cn in names(prepared_data$config$constructs)) {
-      calc_val <- list(
-        name = paste0(cn, "_should_stop"),
-        expression = "false"  # Default to not stopped
-      )
-      survey$calculatedValues[[length(survey$calculatedValues) + 1]] <- calc_val
     }
   }
   
