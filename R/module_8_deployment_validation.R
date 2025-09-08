@@ -210,13 +210,15 @@ simulate_deployed_questionnaire <- function(boundary_tables, pattern_rules = NUL
   stop_reasons <- character(n_respondents)
   classifications <- numeric(n_respondents)
   
-  # Load the actual JSON to simulate
-  surveyjs_json_file <- file.path("deployment", "surveyjs_config_working.json")
-  if (!file.exists(surveyjs_json_file)) {
-    # Try the regular file if working version doesn't exist
-    surveyjs_json_file <- file.path("deployment", "surveyjs_config.json")
-  }
+  # # Load the actual JSON to simulate
+  # surveyjs_json_file <- file.path("deployment", "surveyjs_config_working.json")
+  # if (!file.exists(surveyjs_json_file)) {
+  #   # Try the regular file if working version doesn't exist
+  #   surveyjs_json_file <- file.path("deployment", "surveyjs_config.json")
+  # }
   
+  # Load the actual JSON to simulate
+  surveyjs_json_file <- file.path("deployment", "surveyjs_config.json")
   if (!file.exists(surveyjs_json_file)) {
     stop("surveyjs_config.json not found. Please ensure Module 7 has been run.")
   }
