@@ -1,5 +1,5 @@
 # ============================================================================
-# Module 8: Deployment Validation Module (JSON-BASED VALIDATION) - FIXED
+# Module 8: Deployment Validation Module
 # ============================================================================
 # Purpose: Validate deployment artifacts by simulating the actual JSON logic
 #          and comparing actual performance to predicted performance
@@ -186,10 +186,7 @@ validate_deployment <- function(deployment_package,
   return(validation_results)
 }
 
-#' Simulate Deployed Questionnaire (JSON-BASED) - FIXED
-#'
-#' This simulates what the actual SurveyJS implementation would do
-#' based on the JSON visibility conditions
+#' Simulate Deployed Questionnaire (UPDATED TO PASS CALCULATED VALUES)
 #'
 #' @param boundary_tables Stopping boundary tables (not used in JSON simulation)
 #' @param pattern_rules Pattern-specific rules (not used in JSON simulation)
@@ -214,21 +211,24 @@ simulate_deployed_questionnaire <- function(boundary_tables, pattern_rules = NUL
   classifications <- numeric(n_respondents)
   
   # Load the actual JSON to simulate
-  surveyjs_json_file <- file.path("deployment", "surveyjs_config.json")
+  surveyjs_json_file <- file.path("deployment", "surveyjs_config_working.json")
+  if (!file.exists(surveyjs_json_file)) {
+    # Try the regular file if working version doesn't exist
+    surveyjs_json_file <- file.path("deployment", "surveyjs_config.json")
+  }
+  
   if (!file.exists(surveyjs_json_file)) {
     stop("surveyjs_config.json not found. Please ensure Module 7 has been run.")
   }
   
-  # Load JSON configuration with proper handling
+  # Load JSON configuration
   if (!requireNamespace("jsonlite", quietly = TRUE)) {
     stop("jsonlite package is required to load JSON configuration")
   }
   
-  # Load with simplifyVector = FALSE to preserve structure
   surveyjs_config <- tryCatch({
     jsonlite::fromJSON(surveyjs_json_file, simplifyVector = FALSE)
   }, error = function(e) {
-    # If that fails, try with default settings
     jsonlite::fromJSON(surveyjs_json_file)
   })
   
@@ -237,19 +237,26 @@ simulate_deployed_questionnaire <- function(boundary_tables, pattern_rules = NUL
     stop("No pages found in surveyjs_config.json")
   }
   
+  # Extract calculated values if they exist
+  surveyjs_calculated_values <- surveyjs_config$calculatedValues
+  
   cat("  Processing", n_respondents, "respondents...\n")
-  cat("  Simulating actual SurveyJS visibility logic from JSON\n")
+  cat("  Simulating cascading calculated values logic from JSON\n")
+  if (!is.null(surveyjs_calculated_values)) {
+    cat("  Found", length(surveyjs_calculated_values), "calculated values\n")
+  }
   
   pb <- txtProgressBar(min = 0, max = n_respondents, style = 3)
   
   # Simulate each respondent
   for (i in seq_len(n_respondents)) {
     
-    # Simulate based on JSON visibility conditions
+    # Simulate based on JSON logic with calculated values
     result <- simulate_json_logic_for_respondent(
       respondent_idx = i,
       validation_data = validation_data,
       surveyjs_pages = surveyjs_config$pages,
+      surveyjs_calculated_values = surveyjs_calculated_values,
       admin_sequence = admin_sequence,
       prepared_data = prepared_data
     )
@@ -277,32 +284,49 @@ simulate_deployed_questionnaire <- function(boundary_tables, pattern_rules = NUL
     classifications = classifications,
     n_items_used = stopped_at,
     ordered_items = ordered_items,
-    json_based = TRUE,  # Flag that this used JSON simulation
-    pattern_based = !is.null(pattern_rules) && impl_params$use_pattern_boundaries
+    json_based = TRUE,
+    pattern_based = !is.null(pattern_rules) && impl_params$use_pattern_boundaries,
+    uses_calculated_values = !is.null(surveyjs_calculated_values)
   ))
 }
 
-#' Simulate JSON Logic for a Single Respondent (FIXED VERSION)
+#' Simulate JSON Logic for a Single Respondent (SIMPLE NON-OPTIMIZED VERSION)
+#'
+#' This version evaluates ALL calculated values after each response to ensure cascades work
 #'
 #' @param respondent_idx Respondent index
 #' @param validation_data Validation data
 #' @param surveyjs_pages Pages from JSON config
+#' @param surveyjs_calculated_values Calculated values from JSON config
 #' @param admin_sequence Administration sequence
 #' @param prepared_data Prepared data
 #' @return Simulation result
 simulate_json_logic_for_respondent <- function(respondent_idx, validation_data,
-                                               surveyjs_pages, admin_sequence,
-                                               prepared_data) {
+                                               surveyjs_pages, surveyjs_calculated_values,
+                                               admin_sequence, prepared_data) {
   
   responses_collected <- list()
   items_administered <- character()
+  calculated_values <- list()
   
-  # Handle different possible structures from jsonlite::fromJSON
-  # Pages could be a list, data frame, or other structure
+  # Initialize all calculated values to FALSE
+  if (!is.null(surveyjs_calculated_values)) {
+    if (is.data.frame(surveyjs_calculated_values)) {
+      for (i in 1:nrow(surveyjs_calculated_values)) {
+        calc_name <- as.character(surveyjs_calculated_values$name[i])
+        calculated_values[[calc_name]] <- FALSE
+      }
+    } else if (is.list(surveyjs_calculated_values)) {
+      for (calc_val in surveyjs_calculated_values) {
+        if (!is.null(calc_val$name)) {
+          calculated_values[[as.character(calc_val$name)]] <- FALSE
+        }
+      }
+    }
+  }
   
-  # Convert to list if it's a data frame
+  # Convert pages to list if needed
   if (is.data.frame(surveyjs_pages)) {
-    # Convert each row to a list
     pages_list <- list()
     for (i in 1:nrow(surveyjs_pages)) {
       pages_list[[i]] <- as.list(surveyjs_pages[i, ])
@@ -310,48 +334,34 @@ simulate_json_logic_for_respondent <- function(respondent_idx, validation_data,
     surveyjs_pages <- pages_list
   }
   
-  # Get the number of pages
+  # Process each page
   n_pages <- length(surveyjs_pages)
   
-  # Process each page by index
   for (page_idx in seq_len(n_pages)) {
-    # Get the page - handle both list and other structures
-    if (is.list(surveyjs_pages)) {
-      page <- surveyjs_pages[[page_idx]]
-    } else {
-      # This shouldn't happen after conversion above, but just in case
-      next
-    }
+    page <- surveyjs_pages[[page_idx]]
     
-    # Skip if page is NULL or not a list
     if (is.null(page) || !is.list(page)) next
-    
-    # Skip completion page
     if (!is.null(page$name) && page$name == "completion") next
     
-    # Get question from page elements
-    # Handle case where elements might be nested differently
+    # Get question from page
     question <- NULL
     if (!is.null(page$elements)) {
       if (is.list(page$elements)) {
         if (length(page$elements) > 0) {
-          # Elements could be a list of lists or a single list
           if (is.list(page$elements[[1]])) {
             question <- page$elements[[1]]
           } else if (!is.null(page$elements$type)) {
-            # Elements might be flattened
             question <- page$elements
           }
         }
       } else if (is.data.frame(page$elements) && nrow(page$elements) > 0) {
-        # Convert first row to list
         question <- as.list(page$elements[1, ])
       }
     }
     
     if (is.null(question)) next
     
-    item_name <- question$name
+    item_name <- as.character(question$name)
     if (is.null(item_name)) next
     
     # Check visibility
@@ -363,29 +373,38 @@ simulate_json_logic_for_respondent <- function(respondent_idx, validation_data,
     }
     # Then check visibleIf condition
     else if (!is.null(question$visibleIf) && question$visibleIf != "") {
-      # Ensure visibleIf is a character string
       visibility_condition <- as.character(question$visibleIf)
       
-      # Evaluate visibility based on COLLECTED responses only
-      is_visible <- evaluate_visibility_with_collected_responses(
+      # Evaluate visibility with current calculated values
+      is_visible <- evaluate_visibility_with_calculated_values(
         condition = visibility_condition,
-        collected_responses = responses_collected
+        collected_responses = responses_collected,
+        calculated_values = calculated_values
       )
     }
     
+    # Only process if visible
     if (is_visible) {
       # Item is shown - collect response
-      items_administered <- c(items_administered, as.character(item_name))
+      items_administered <- c(items_administered, item_name)
       
       # Get the response value
-      if (as.character(item_name) %in% names(validation_data)) {
-        response_value <- validation_data[respondent_idx, as.character(item_name)]
+      if (item_name %in% names(validation_data)) {
+        response_value <- validation_data[respondent_idx, item_name]
         if (!is.na(response_value)) {
-          responses_collected[[as.character(item_name)]] <- response_value
+          responses_collected[[item_name]] <- response_value
+          
+          # CRITICAL: Re-evaluate ALL calculated values after each response
+          # This ensures cascades work properly
+          calculated_values <- evaluate_calculated_values(
+            calculated_values_config = surveyjs_calculated_values,
+            collected_responses = responses_collected,
+            existing_calculated_values = calculated_values
+          )
         }
       }
     }
-    # If not visible, item is skipped (no response collected)
+    # If not visible, skip the item entirely
   }
   
   # Determine stop reason and classification
@@ -421,48 +440,92 @@ simulate_json_logic_for_respondent <- function(respondent_idx, validation_data,
     items_administered = items_administered,
     responses_collected = responses_collected,
     stop_reason = stop_reason,
-    classification = classification
+    classification = classification,
+    calculated_values = calculated_values
   ))
 }
 
-#' #' Evaluate Visibility Condition with Collected Responses
-#' #'
-#' #' @param condition Visibility condition string
-#' #' @param collected_responses Responses collected so far
-#' #' @return Boolean for visibility
-#' evaluate_visibility_with_collected_responses <- function(condition, collected_responses) {
-#'   
-#'   # Replace item references with values for collected responses
-#'   eval_condition <- condition
-#'   
-#'   for (item_name in names(collected_responses)) {
-#'     pattern <- paste0("\\{", item_name, "\\}")
-#'     replacement <- as.character(collected_responses[[item_name]])
-#'     eval_condition <- gsub(pattern, replacement, eval_condition)
-#'   }
-#'   
-#'   # Check if there are still unreplaced item references
-#'   # These would be items that weren't shown/collected
-#'   if (grepl("\\{[^}]+\\}", eval_condition)) {
-#'     # Can't evaluate condition with missing items
-#'     # Conservative approach: assume visible
-#'     return(TRUE)
-#'   }
-#'   
-#'   # Convert to R syntax
-#'   eval_condition <- gsub(" and ", " & ", eval_condition)
-#'   eval_condition <- gsub(" or ", " | ", eval_condition)
-#'   
-#'   # Evaluate
-#'   tryCatch({
-#'     result <- eval(parse(text = eval_condition))
-#'     return(as.logical(result))
-#'   }, error = function(e) {
-#'     warning(paste("Failed to evaluate condition:", condition))
-#'     return(TRUE)  # Default to visible if can't evaluate
-#'   })
-#' }
+#' Extract Dependencies from Expression (NEW HELPER)
+#'
+#' @param expression Expression string
+#' @return List of item and calculated value dependencies
+extract_dependencies <- function(expression) {
+  if (is.null(expression)) return(list(items = character(), calcs = character()))
+  
+  expr_str <- as.character(expression)
+  
+  # Extract item references (q followed by numbers)
+  items <- unique(gsub("[{}]", "", regmatches(expr_str, gregexpr("\\{q[0-9]+\\}", expr_str))[[1]]))
+  
+  # Extract calculated value references (contain "stopped_at_position")
+  calcs <- unique(gsub("[{}]", "", regmatches(expr_str, gregexpr("\\{[a-z_]+_stopped_at_position_[0-9]+\\}", expr_str))[[1]]))
+  
+  return(list(items = items, calcs = calcs))
+}
 
+#' Evaluate Single Calculated Value (OPTIMIZED)
+#'
+#' @param calc_info Calculated value info with expression and dependencies
+#' @param collected_responses Collected responses
+#' @param calculated_values Current calculated values
+#' @return Boolean result
+evaluate_single_calculated_value <- function(calc_info, collected_responses, calculated_values) {
+  
+  expression <- calc_info$expression
+  
+  # Handle simple cases
+  if (expression == "false") return(FALSE)
+  if (expression == "true") return(TRUE)
+  
+  # Early exit if dependencies not met
+  if (length(calc_info$depends_on$items) > 0) {
+    if (!all(calc_info$depends_on$items %in% names(collected_responses))) {
+      # Some required items haven't been collected yet
+      return(FALSE)
+    }
+  }
+  
+  eval_expression <- expression
+  
+  # Replace calculated value references
+  for (calc_name in calc_info$depends_on$calcs) {
+    if (calc_name %in% names(calculated_values)) {
+      pattern <- paste0("\\{", calc_name, "\\}")
+      replacement <- ifelse(calculated_values[[calc_name]], "true", "false")
+      eval_expression <- gsub(pattern, replacement, eval_expression, fixed = FALSE)
+    }
+  }
+  
+  # Replace item references
+  for (item_name in calc_info$depends_on$items) {
+    if (item_name %in% names(collected_responses)) {
+      pattern <- paste0("\\{", item_name, "\\}")
+      replacement <- as.character(collected_responses[[item_name]])
+      eval_expression <- gsub(pattern, replacement, eval_expression, fixed = FALSE)
+    } else {
+      # Item not collected - pattern can't match
+      pattern <- paste0("\\{", item_name, "\\}")
+      eval_expression <- gsub(pattern, "-999", eval_expression, fixed = FALSE)
+    }
+  }
+  
+  # Convert to R syntax
+  eval_expression <- gsub(" and ", " & ", eval_expression)
+  eval_expression <- gsub(" or ", " | ", eval_expression)
+  eval_expression <- gsub(" = ", " == ", eval_expression)
+  eval_expression <- gsub("\\bfalse\\b", "FALSE", eval_expression)
+  eval_expression <- gsub("\\btrue\\b", "TRUE", eval_expression)
+  
+  # Evaluate
+  tryCatch({
+    result <- eval(parse(text = eval_expression))
+    return(as.logical(result))
+  }, error = function(e) {
+    return(FALSE)
+  })
+}
+
+#' Evaluate Visibility Condition with Collected Responses
 evaluate_visibility_with_collected_responses <- function(condition, collected_responses) {
   eval_condition <- condition
   
@@ -542,6 +605,177 @@ validate_continuation_logic_json_based <- function(simulation_results, admin_seq
                      "JSON-based continuation logic validation passed",
                      "Issues detected in JSON-based continuation logic")
   ))
+}
+
+#' Evaluate Calculated Values (COMPLETE FUNCTION)
+#'
+#' Evaluates calculated values based on the cascading approach
+#'
+#' @param calculated_values_config List of calculated value configurations from JSON
+#' @param collected_responses Responses collected so far
+#' @param existing_calculated_values Previously evaluated calculated values
+#' @return Updated list of calculated values
+evaluate_calculated_values <- function(calculated_values_config, 
+                                       collected_responses,
+                                       existing_calculated_values = list()) {
+  
+  if (is.null(calculated_values_config) || length(calculated_values_config) == 0) {
+    return(existing_calculated_values)
+  }
+  
+  # Convert to list if needed
+  if (is.data.frame(calculated_values_config)) {
+    calc_list <- list()
+    for (i in 1:nrow(calculated_values_config)) {
+      calc_list[[i]] <- as.list(calculated_values_config[i, ])
+    }
+    calculated_values_config <- calc_list
+  }
+  
+  # Process each calculated value in order (important for cascading)
+  for (calc_val in calculated_values_config) {
+    if (is.null(calc_val$name) || is.null(calc_val$expression)) next
+    
+    calc_name <- as.character(calc_val$name)
+    calc_expression <- as.character(calc_val$expression)
+    
+    # Evaluate the expression
+    result <- evaluate_calculated_expression(
+      expression = calc_expression,
+      collected_responses = collected_responses,
+      calculated_values = existing_calculated_values
+    )
+    
+    # Store the result
+    existing_calculated_values[[calc_name]] <- result
+  }
+  
+  return(existing_calculated_values)
+}
+
+#' Evaluate Calculated Expression (COMPLETE FUNCTION)
+#'
+#' @param expression The expression to evaluate
+#' @param collected_responses Collected responses
+#' @param calculated_values Current calculated values
+#' @return Boolean result of expression
+evaluate_calculated_expression <- function(expression, collected_responses, calculated_values) {
+  
+  # Handle simple cases
+  if (expression == "false") return(FALSE)
+  if (expression == "true") return(TRUE)
+  
+  eval_expression <- expression
+  
+  # Replace calculated value references with their values
+  for (calc_name in names(calculated_values)) {
+    pattern <- paste0("\\{", calc_name, "\\}")
+    # Use lowercase to match JavaScript format
+    replacement <- ifelse(calculated_values[[calc_name]], "true", "false")
+    eval_expression <- gsub(pattern, replacement, eval_expression)
+  }
+  
+  # Handle any remaining calculated value references (not yet evaluated)
+  # These should default to false
+  remaining_calc_refs <- regmatches(eval_expression, gregexpr("\\{[a-z_]+_stopped_at_position_[0-9]+\\}", eval_expression))[[1]]
+  for (ref in remaining_calc_refs) {
+    eval_expression <- gsub(ref, "false", eval_expression, fixed = TRUE)
+  }
+  
+  # Replace item references with values
+  for (item_name in names(collected_responses)) {
+    pattern <- paste0("\\{", item_name, "\\}")
+    replacement <- as.character(collected_responses[[item_name]])
+    eval_expression <- gsub(pattern, replacement, eval_expression)
+  }
+  
+  # Check if there are still unreplaced item references
+  remaining_item_refs <- regmatches(eval_expression, gregexpr("\\{q[0-9]+\\}", eval_expression))[[1]]
+  if (length(remaining_item_refs) > 0) {
+    # Items that haven't been shown yet - patterns can't match
+    # Replace with -999 (won't match any pattern)
+    for (ref in remaining_item_refs) {
+      eval_expression <- gsub(ref, "-999", eval_expression, fixed = TRUE)
+    }
+  }
+  
+  # Convert to R syntax
+  eval_expression <- gsub(" and ", " & ", eval_expression)
+  eval_expression <- gsub(" or ", " | ", eval_expression)
+  eval_expression <- gsub(" = ", " == ", eval_expression)
+  # Convert JavaScript booleans to R booleans
+  eval_expression <- gsub("\\bfalse\\b", "FALSE", eval_expression)
+  eval_expression <- gsub("\\btrue\\b", "TRUE", eval_expression)
+  
+  # Evaluate
+  tryCatch({
+    result <- eval(parse(text = eval_expression))
+    return(as.logical(result))
+  }, error = function(e) {
+    # If we can't evaluate, default to FALSE (don't stop)
+    return(FALSE)
+  })
+}
+
+#' Evaluate Visibility with Calculated Values (COMPLETE FUNCTION)
+#'
+#' @param condition Visibility condition string
+#' @param collected_responses Responses collected so far
+#' @param calculated_values Current calculated values
+#' @return Boolean for visibility
+evaluate_visibility_with_calculated_values <- function(condition, collected_responses, calculated_values) {
+  
+  eval_condition <- condition
+  
+  # Replace calculated value references with their boolean values
+  # Handle the pattern {calc_name} in the condition
+  for (calc_name in names(calculated_values)) {
+    pattern <- paste0("\\{", calc_name, "\\}")
+    # Use lowercase to match JavaScript boolean format
+    replacement <- ifelse(calculated_values[[calc_name]], "true", "false")
+    eval_condition <- gsub(pattern, replacement, eval_condition)
+  }
+  
+  # Handle any remaining calculated value references that weren't evaluated yet
+  # These should default to false (not stopped yet)
+  remaining_calc_refs <- regmatches(eval_condition, gregexpr("\\{[a-z_]+_stopped_at_position_[0-9]+\\}", eval_condition))[[1]]
+  for (ref in remaining_calc_refs) {
+    eval_condition <- gsub(ref, "false", eval_condition, fixed = TRUE)
+  }
+  
+  # Replace item references
+  for (item_name in names(collected_responses)) {
+    pattern <- paste0("\\{", item_name, "\\}")
+    replacement <- as.character(collected_responses[[item_name]])
+    eval_condition <- gsub(pattern, replacement, eval_condition)
+  }
+  
+  # Check for unreplaced item references (not calculated values)
+  remaining_item_refs <- regmatches(eval_condition, gregexpr("\\{q[0-9]+\\}", eval_condition))[[1]]
+  if (length(remaining_item_refs) > 0) {
+    # If the condition depends on items we don't have, default to FALSE (hidden)
+    return(FALSE)
+  }
+  
+  # Convert to R syntax
+  eval_condition <- gsub(" and ", " & ", eval_condition)
+  eval_condition <- gsub(" or ", " | ", eval_condition)
+  eval_condition <- gsub(" = ", " == ", eval_condition)
+  # Convert JavaScript booleans to R booleans
+  eval_condition <- gsub("\\bfalse\\b", "FALSE", eval_condition)
+  eval_condition <- gsub("\\btrue\\b", "TRUE", eval_condition)
+  
+  # Evaluate
+  tryCatch({
+    result <- eval(parse(text = eval_condition))
+    return(as.logical(result))
+  }, error = function(e) {
+    # Don't warn for expected missing calculated values
+    if (!grepl("stopped_at_position", condition)) {
+      warning(paste("Failed to evaluate visibility condition:", condition))
+    }
+    return(TRUE)  # Default to visible if can't evaluate (conservative approach)
+  })
 }
 
 # ============================================================================
