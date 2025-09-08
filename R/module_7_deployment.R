@@ -297,7 +297,7 @@ generate_surveyjs_json_working <- function(method_results, prepared_data, bounda
   # Save JSON
   if (requireNamespace("jsonlite", quietly = TRUE)) {
     json_output <- jsonlite::toJSON(survey, pretty = TRUE, auto_unbox = TRUE)
-    writeLines(json_output, file.path(output_dir, "surveyjs_config_working.json"))
+    writeLines(json_output, file.path(output_dir, "surveyjs_config.json")) #"surveyjs_config_working.json"
   }
   
   return(survey)
