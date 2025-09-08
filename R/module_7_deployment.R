@@ -147,10 +147,10 @@ generate_surveyjs_json_working <- function(method_results, prepared_data, bounda
     title = survey_config$title,
     description = survey_config$description,
     calculatedValues = list(),
-    pages = list(),
-    goNextPageAutomatic = TRUE,
-    showNavigationButtons = "bottom",
-    clearInvisibleValues = "none"
+    pages = list()
+    #goNextPageAutomatic = TRUE,
+    #showNavigationButtons = "bottom",
+    #clearInvisibleValues = "none"
   )
   
   # Get method details
@@ -291,8 +291,17 @@ generate_surveyjs_json_working <- function(method_results, prepared_data, bounda
   )
   
   # Survey settings
+  survey$clearInvisibleValues = "none"
+  survey$questionErrorLocation = "bottom"
   survey$showProgressBar <- TRUE
+  survey$progressBarLocation = "belowheader"
   survey$progressBarType <- "questions"
+  survey$goNextPageAutomatic = TRUE
+  survey$autoAdvanceEnabled = TRUE
+  survey$autoAdvanceAllowComplete = FALSE
+  survey$showNavigationButtons = "bottom"
+  survey$widthMode = "responsive"
+  survey$headerView = "advanced"
   
   # Save JSON
   if (requireNamespace("jsonlite", quietly = TRUE)) {
