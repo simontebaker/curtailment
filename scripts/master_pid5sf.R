@@ -968,13 +968,42 @@ cat("==============================================\n\n")
 #   output_dir = "deployment_validation"
 # )
 
-validation_results <- validate_deployment(
-  deployment_package = deployment_package,
-  prepared_data = prepared_data,
-  evaluation_results = evaluation_results,
-  optimization_results = optimization_results,
-  output_dir = "deployment_validation"
-)
+# validation_results <- validate_deployment(
+#   deployment_package = deployment_package,
+#   prepared_data = prepared_data,
+#   evaluation_results = evaluation_results,
+#   optimization_results = optimization_results,
+#   output_dir = "deployment_validation"
+# )
+
+# Run validation on a random subset
+validate_deployment_subset <- function(n_sample = 100) {
+  
+  # Get test data and sample
+  test_data_full <- prepared_data$splits$test
+  
+  # Random sample
+  set.seed(123)  # For reproducibility
+  sample_indices <- sample(1:nrow(test_data_full), min(n_sample, nrow(test_data_full)))
+  test_data_subset <- test_data_full[sample_indices, ]
+  
+  cat("Running validation on", nrow(test_data_subset), "respondents (sampled from", nrow(test_data_full), ")\n\n")
+  
+  # Run validation with subset
+  validation_results <- validate_deployment(
+    deployment_package = deployment_package,
+    prepared_data = prepared_data,
+    evaluation_results = evaluation_results,
+    optimization_results = optimization_results,
+    validation_data = test_data_subset,  # Use subset
+    output_dir = "deployment_validation" #output_dir = "deployment_validation_subset"
+  )
+  
+  return(validation_results)
+}
+
+# Run with 100 respondents
+validation_results <- validate_deployment_subset(100)
 
 # ============================================================================
 # End of Module 8
