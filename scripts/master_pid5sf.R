@@ -48,18 +48,6 @@ cat("Output directory:", run_dir, "\n", file = log_file, append = TRUE)
 start_time <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
 cat("Run started at:", start_time, "\n", file = log_file, append = TRUE)
 
-# # Open a file connection
-# file_con <- file("console_output.txt", open = "wt")
-# # Redirect both output streams (standard output and messages/warnings) to a file (and also show standard output in the console)
-# sink(file_con, split = TRUE) # Standard output
-# sink(file_con, type = "message") # Messages/warnings
-# # Close both sinks and file connection when script exits
-# on.exit({
-#   sink(type = "message") # Close message/warning sink first
-#   sink() # Close standard output sink
-#   close(file_con) # Close file connection
-# }, add = TRUE)
-
 # ============================================================================
 # Load Modules
 # ============================================================================
@@ -249,10 +237,10 @@ cat("======================================\n\n")
 cat("Creating analysis configuration...\n\n")
 config_module_2 <- create_analysis_config(
   questionnaire_type = prepared_data$config$questionnaire_type,
-  ordering_methods = c("original", "incremental_auc"), # ordering_methods = c("original", "auc", "incremental_auc", "correlation", "forward_stepwise"),
-  reduction_methods = c("none", "sc_ep"), # reduction_methods = c("none", "dc", "sc_ep"),
+  ordering_methods = c("original", "auc", "incremental_auc"),
+  reduction_methods = c("none", "sc_ep"),
   two_step_mode = TRUE,
-  top_candidates = 4, # top_candidates = 15,
+  top_candidates = 6,
   constraints = list(
     stop_low_only = TRUE,
     min_items_per_construct = 1,
@@ -351,7 +339,7 @@ cat(sprintf("\n%d/%d item ordering methods completed successfully.\n",
             successful, length(config_module_2$ordering_methods)))
 
 # Save results
-saveRDS(ordering_results, file.path(run_dir, "ordering_results.rds")) # saveRDS(ordering_results, "ordering_results.rds")
+saveRDS(ordering_results, file.path(run_dir, "ordering_results.rds"))
 cat("\nItem ordering results saved to 'ordering_results.rds'\n")
 
 # ============================================================================
@@ -374,9 +362,6 @@ all_combination_results <- list()
 # Counter for progress
 total_combinations <- nrow(method_combinations)
 completed <- 0
-
-# # Enable debug output
-# DEBUG_CURTAILMENT <- FALSE # Make TRUE to see debug output
 
 # Test each method combination
 cat("Testing method combinations:\n")
@@ -406,60 +391,14 @@ for (i in seq_len(nrow(method_combinations))) {
   if (!is.na(combo$gamma_0)) method_params$gamma_0 <- combo$gamma_0
   if (!is.na(combo$gamma_1)) method_params$gamma_1 <- combo$gamma_1
   
-  # # Fix: (Merge the constraints from config_module_2 into prepared_data$config before calling the reduction methods)
-  # # Create a config (i.e., config_module_4) that combines prepared_data$config with the constraints specified in config_module_2 (i.e., config_module_2$constraints)
-  # config_module_4 <- prepared_data$config
-  # config_module_4$constraints <- config_module_2$constraints
-  
-  # Fix: (Merge prepared_data$config and config_module_2 into config_module_4 before calling the reduction methods)
+  # Merge prepared_data$config and config_module_2 into config_module_4 before calling the reduction methods
   # Create a config (i.e., config_module_4) that contains the fields in prepared_data$config and the fields in config_module_2
   config_module_4 <- modifyList(prepared_data$config, config_module_2)
   # Preserve the class attribute from config_module_2
   class(config_module_4) <- class(config_module_2)
   
-  # # Try to apply reduction method
-  # tryCatch({
-  #   # Training phase
-  #   training_params <- train_reduction_method(
-  #     method = combo$reduction,
-  #     ordered_items = ordered_items,
-  #     train_data = prepared_data$splits$train,
-  #     config = config_module_4, # config = prepared_data$config,
-  #     method_params = method_params
-  #   )
-  #   
-  #   # Test phase
-  #   test_results <- apply_reduction_method(
-  #     method = combo$reduction,
-  #     ordered_items = ordered_items,
-  #     test_data = prepared_data$splits$test,
-  #     config = config_module_4, # config = prepared_data$config,
-  #     method_params = method_params,
-  #     training_params = training_params
-  #   )
-  #   
-  #   # Store results
-  #   all_combination_results[[combo$method_id]] <- list(
-  #     combination = combo,
-  #     ordering_result = ordering_results[[combo$ordering]],
-  #     reduction_result = test_results,
-  #     training_params = training_params
-  #   )
-  #   
-  #   completed <- completed + 1
-  #   cat("✓\n")
-  #   
-  # }, error = function(e) {
-  #   cat("✗\n")
-  #   cat(sprintf("    Error: %s\n", e$message))
-  #   all_combination_results[[combo$method_id]] <- list(
-  #     combination = combo,
-  #     error = e$message
-  #   )
-  # })
-  
-  # Fix: (New method combination testing loop to handle convergence failures)
   # Try to apply reduction method
+  # Note: This method combination testing loop is supposed to handle convergence failures
   tryCatch({
     # Training phase
     training_params <- train_reduction_method(
@@ -560,7 +499,7 @@ cat(sprintf("\n%d/%d method combinations completed successfully.\n",
             completed, total_combinations))
 
 # Save results
-saveRDS(all_combination_results, file.path(run_dir, "all_combination_results.rds")) # saveRDS(all_combination_results, "all_combination_results.rds")
+saveRDS(all_combination_results, file.path(run_dir, "all_combination_results.rds"))
 cat("\nAll method combination results saved to 'all_combination_results.rds'\n")
 
 # ============================================================================
@@ -577,141 +516,17 @@ cat("\n=====================================\n")
 cat("=== Module 5: Evaluation Module ===\n")
 cat("=====================================\n\n")
 
-# Source the evaluation module
-# cat("Loading evaluation module...\n")
-# source("module_5_evaluation.R")
-
 # Evaluate all method combinations
 cat("Starting comprehensive evaluation...\n")
 evaluation_results <- evaluate_all_methods(
-  results_path = file.path(run_dir, "all_combination_results.rds"), # results_path = "all_combination_results.rds",
+  results_path = file.path(run_dir, "all_combination_results.rds"),
   prepared_data = prepared_data,
   config = config_module_2,
-  output_dir = file.path(run_dir, "evaluation_results") # output_dir = "evaluation_results"
+  output_dir = file.path(run_dir, "evaluation_results")
 )
 
 # Print summary of results
 # print(evaluation_results)
-
-# # ============================================================================
-# # Optional: Additional Analyses
-# # ============================================================================
-# 
-# # 1. Examine specific method comparisons
-# if (TRUE) {  # Set to TRUE to run
-#   cat("\n\nComparing top two methods...\n")
-#   top_two <- evaluation_results$performance_matrix[
-#     order(evaluation_results$performance_matrix$balanced_accuracy * 
-#             (1 - evaluation_results$performance_matrix$fnr), 
-#           decreasing = TRUE)[1:2], "method_id"
-#   ]
-#   
-#   comparison <- compare_methods(
-#     method1_id = top_two[1],
-#     method2_id = top_two[2],
-#     all_results = all_combination_results,
-#     prepared_data = prepared_data
-#   )
-#   
-#   cat("Method 1:", comparison$method1$id, "\n")
-#   cat("  - FNR:", sprintf("%.3f", comparison$method1$performance$fnr), "\n")
-#   cat("  - Accuracy:", sprintf("%.3f", comparison$method1$performance$accuracy), "\n")
-#   cat("  - Mean items:", sprintf("%.1f", comparison$method1$mean_items), "\n")
-#   
-#   cat("\nMethod 2:", comparison$method2$id, "\n")
-#   cat("  - FNR:", sprintf("%.3f", comparison$method2$performance$fnr), "\n")
-#   cat("  - Accuracy:", sprintf("%.3f", comparison$method2$performance$accuracy), "\n")
-#   cat("  - Mean items:", sprintf("%.1f", comparison$method2$mean_items), "\n")
-#   
-#   cat("\nAgreement:", sprintf("%.1f%%", comparison$agreement * 100), "\n")
-#   cat("McNemar's test p-value:", sprintf("%.4f", comparison$mcnemar_test$p.value), "\n")
-# }
-# 
-# # 2. Examine construct-specific performance (for multi-construct)
-# if (prepared_data$config$questionnaire_type == "multi-construct") {
-#   cat("\n\nConstruct-specific performance for recommended method:\n")
-#   rec_perf <- evaluation_results$full_performance
-#   
-#   if (!is.null(rec_perf$construct_metrics)) {
-#     construct_summary <- do.call(rbind, lapply(names(rec_perf$construct_metrics), 
-#                                                function(c) {
-#                                                  metrics <- rec_perf$construct_metrics[[c]]
-#                                                  data.frame(
-#                                                    construct = c,
-#                                                    sensitivity = metrics$sensitivity,
-#                                                    specificity = metrics$specificity,
-#                                                    fnr = metrics$fnr,
-#                                                    accuracy = metrics$accuracy,
-#                                                    stringsAsFactors = FALSE
-#                                                  )
-#                                                }))
-#     
-#     # Sort by FNR (worst performing first)
-#     construct_summary <- construct_summary[order(construct_summary$fnr, 
-#                                                  decreasing = TRUE), ]
-#     
-#     cat("\nConstructs with highest FNR:\n")
-#     print(head(construct_summary, 5))
-#     
-#     # Save full construct analysis
-#     write.csv(construct_summary, 
-#               file.path("evaluation_results", "construct_performance.csv"),
-#               row.names = FALSE)
-#   }
-# }
-# 
-# # 3. Sensitivity analysis for gamma parameters
-# if (any(grepl("^sc_", evaluation_results$performance_matrix$reduction))) {
-#   cat("\n\nGamma parameter sensitivity analysis:\n")
-#   
-#   sc_methods <- evaluation_results$performance_matrix[
-#     grepl("^sc_", evaluation_results$performance_matrix$reduction), 
-#   ]
-#   
-#   # Group by reduction method and analyze gamma effects
-#   for (method in unique(sc_methods$reduction)) {
-#     method_subset <- sc_methods[sc_methods$reduction == method, ]
-#     
-#     if (nrow(method_subset) > 1) {
-#       cat("\n", method, ":\n")
-#       cat("  Gamma_0 range:", range(method_subset$gamma_0, na.rm = TRUE), "\n")
-#       cat("  FNR range:", range(method_subset$fnr, na.rm = TRUE), "\n")
-#       cat("  Reduction % range:", range(method_subset$reduction_pct, na.rm = TRUE), "\n")
-#       
-#       # Check correlation between gamma and performance
-#       if (length(unique(method_subset$gamma_0)) > 1) {
-#         cor_gamma_fnr <- cor(method_subset$gamma_0, method_subset$fnr, 
-#                              use = "complete.obs")
-#         cat("  Correlation (gamma_0, FNR):", sprintf("%.3f", cor_gamma_fnr), "\n")
-#       }
-#     }
-#   }
-# }
-# 
-# # 4. Export key results for further analysis
-# cat("\n\nExporting key results...\n")
-# 
-# # Recommended method details
-# saveRDS(evaluation_results$recommended_method, 
-#         file.path("evaluation_results", "recommended_method.rds"))
-# 
-# # Pareto-optimal methods
-# write.csv(evaluation_results$detailed_results$pareto_optimal,
-#           file.path("evaluation_results", "pareto_optimal_methods.csv"),
-#           row.names = FALSE)
-# 
-# # Performance matrix for all methods
-# write.csv(evaluation_results$performance_matrix,
-#           file.path("evaluation_results", "all_methods_performance.csv"),
-#           row.names = FALSE)
-# 
-# cat("\n✅ Evaluation module completed successfully!\n")
-# cat("Results saved to: evaluation_results/\n")
-# cat("\nKey outputs:\n")
-# cat("  - Executive summary: evaluation_results/executive_summary.txt\n")
-# cat("  - Performance report: evaluation_results/performance_report.html\n")
-# cat("  - Visualizations: evaluation_results/visualizations/\n")
-# cat("  - Implementation guide: evaluation_results/implementation_guide.txt\n")
 
 # ============================================================================
 # End of Module 5
@@ -959,15 +774,6 @@ cat("\n==============================================\n")
 cat("=== Module 8: Deployment Validation Module ===\n")
 cat("==============================================\n\n")
 
-# deployment_validation <- run_deployment_validation(
-#   deployment_package,
-#   prepared_data,
-#   evaluation_results,
-#   optimization_results,
-#   run_full_validation = TRUE,
-#   output_dir = "deployment_validation"
-# )
-
 # validation_results <- validate_deployment(
 #   deployment_package = deployment_package,
 #   prepared_data = prepared_data,
@@ -996,7 +802,7 @@ validate_deployment_subset <- function(n_sample = 100) {
     evaluation_results = evaluation_results,
     optimization_results = optimization_results,
     validation_data = test_data_subset,  # Use subset
-    output_dir = "deployment_validation" #output_dir = "deployment_validation_subset"
+    output_dir = "deployment_validation"
   )
   
   return(validation_results)
