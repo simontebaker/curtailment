@@ -146,6 +146,24 @@ get_item_max_score <- function(item_id, item_ranges) {
   }
 }
 
+extract_item_ranges_from_definitions <- function(item_definitions) {
+  item_ranges <- list()
+  
+  for (item_id in names(item_definitions)) {
+    item_def <- item_definitions[[item_id]]
+    
+    if (!is.null(item_def$rateValues) && length(item_def$rateValues) > 0) {
+      values <- sapply(item_def$rateValues, function(rv) rv$value)
+      item_ranges[[item_id]] <- c(min(values), max(values))
+    } else {
+      warning(paste("No rateValues found for item", item_id, "- using default 0-3"))
+      item_ranges[[item_id]] <- c(0, 3)
+    }
+  }
+  
+  return(item_ranges)
+}
+
 #' Generate SurveyJS JSON Configuration (Using the Cascading Calculated Values Approach)
 generate_surveyjs_json_working <- function(method_results, prepared_data, boundary_tables,
                                            admin_sequence, item_definitions, survey_config,
@@ -530,6 +548,16 @@ generate_deployment_package <- function(
   # Validate item definitions
   cat("  Validating item definitions...\n")
   validation <- validate_item_definitions(item_definitions, ordered_items)
+  
+  # Extract item ranges from item definitions
+  item_ranges <- extract_item_ranges_from_definitions(item_definitions)
+  cat("  Extracted item ranges for", length(item_ranges), "items\n")
+  
+  # Store item_ranges in method_results so it gets passed to all functions
+  if (is.null(method_results$reduction_result$training_params)) {
+    method_results$reduction_result$training_params <- list()
+  }
+  method_results$reduction_result$training_params$item_ranges <- item_ranges
   
   if (!validation$valid) {
     stop(paste("Item definition validation failed:\n", 
@@ -962,6 +990,16 @@ generate_stopping_boundaries <- function(method_results, prepared_data, output_d
       }
       
       # Generate boundary table
+      # boundary_table <- generate_single_boundary_table(
+      #   construct_ordered,
+      #   prepared_data$config,
+      #   construct_training_params,
+      #   reduction,
+      #   construct_gamma_0,
+      #   construct_gamma_1,
+      #   stop_low_only,
+      #   construct_name
+      # )
       boundary_table <- generate_single_boundary_table(
         construct_ordered,
         prepared_data$config,
@@ -970,7 +1008,8 @@ generate_stopping_boundaries <- function(method_results, prepared_data, output_d
         construct_gamma_0,
         construct_gamma_1,
         stop_low_only,
-        construct_name
+        construct_name,
+        training_params$item_ranges
       )
       
       boundary_tables[[construct_name]] <- boundary_table
@@ -1040,9 +1079,12 @@ generate_stopping_boundaries <- function(method_results, prepared_data, output_d
 #' @param stop_low_only Whether only low-risk stopping is allowed
 #' @param construct_name Name of construct (NULL for unidimensional)
 #' @return Data frame with boundary information
+# generate_single_boundary_table <- function(ordered_items, config, training_params,
+#                                            reduction, gamma_0, gamma_1, stop_low_only,
+#                                            construct_name = NULL) {
 generate_single_boundary_table <- function(ordered_items, config, training_params,
                                            reduction, gamma_0, gamma_1, stop_low_only,
-                                           construct_name = NULL) {
+                                           construct_name = NULL, item_ranges = NULL) {
   
   n_items <- length(ordered_items)
   
@@ -1079,7 +1121,8 @@ generate_single_boundary_table <- function(ordered_items, config, training_param
     
   } else if (reduction == "dc") {
     # Deterministic curtailment
-    boundaries <- calculate_dc_boundaries(ordered_items, training_params, cutoff)
+    #boundaries <- calculate_dc_boundaries(ordered_items, training_params, cutoff)
+    boundaries <- calculate_dc_boundaries(ordered_items, training_params, cutoff, item_ranges)
     
     for (k in 1:n_items) {
       boundary_df$items_included[k] <- paste(ordered_items[1:k], collapse = ", ")
@@ -1111,9 +1154,13 @@ generate_single_boundary_table <- function(ordered_items, config, training_param
     
   } else if (reduction %in% c("sc_sor", "sc_mor") && gamma_0_valid && gamma_1_valid) {
     # Stochastic curtailment with regression - keep existing logic
+    # boundaries <- calculate_sc_boundaries(
+    #   ordered_items, training_params, reduction,
+    #   gamma_0, gamma_1, cutoff
+    # )
     boundaries <- calculate_sc_boundaries(
       ordered_items, training_params, reduction,
-      gamma_0, gamma_1, cutoff
+      gamma_0, gamma_1, cutoff, item_ranges
     )
     
     for (k in 1:n_items) {
@@ -1171,7 +1218,8 @@ generate_single_boundary_table <- function(ordered_items, config, training_param
 #' @param training_params Training parameters
 #' @param cutoff Classification cutoff
 #' @return List with low and high boundaries
-calculate_dc_boundaries <- function(ordered_items, training_params, cutoff) {
+#calculate_dc_boundaries <- function(ordered_items, training_params, cutoff) {
+calculate_dc_boundaries <- function(ordered_items, training_params, cutoff, item_ranges = NULL) {
   
   n_items <- length(ordered_items)
   low_boundary <- rep(NA, n_items)
@@ -1243,8 +1291,10 @@ calculate_dc_boundaries <- function(ordered_items, training_params, cutoff) {
 #' @param gamma_1 High-risk threshold
 #' @param cutoff Classification cutoff
 #' @return List with low and high boundaries
+#calculate_sc_boundaries <- function(ordered_items, training_params, method,
+#                                    gamma_0, gamma_1, cutoff) {
 calculate_sc_boundaries <- function(ordered_items, training_params, method,
-                                    gamma_0, gamma_1, cutoff) {
+                                    gamma_0, gamma_1, cutoff, item_ranges = NULL) {
   
   n_items <- length(ordered_items)
   low_boundary <- rep(NA, n_items)
@@ -1995,6 +2045,14 @@ generate_pattern_visibility_affirmative <- function(prev_items, pattern_rules,
     }
   }
   
+  # cat("DEBUG: Pattern generation - Item bases:", item_bases, "\n")
+  # cat("DEBUG: Total patterns to generate:", total_patterns, "\n")
+  # if (!is.null(training_params$item_ranges)) {
+  #   cat("DEBUG: Using training_params ranges\n")
+  # } else {
+  #   cat("DEBUG: WARNING - Using fallback ranges!\n")
+  # }
+  
   # Calculate total number of patterns
   total_patterns <- prod(item_bases)
   
@@ -2131,7 +2189,7 @@ generate_surveyjs_json <- function(method_results, prepared_data, boundary_table
         method_results,
         reduction_method,
         stop_low_only,
-        training_params
+        method_results$reduction_result$training_params #training_params
       )
     } else {
       survey$pages <- generate_multi_construct_pages(
