@@ -137,6 +137,15 @@ validate_item_definitions <- function(item_definitions, ordered_items) {
   return(validation_results)
 }
 
+# Helper to get max score for an item from ranges
+get_item_max_score <- function(item_id, item_ranges) {
+  if (!is.null(item_ranges[[item_id]])) {
+    return(item_ranges[[item_id]][2])
+  } else {
+    return(3)  # Default fallback
+  }
+}
+
 #' Generate SurveyJS JSON Configuration (Using the Cascading Calculated Values Approach)
 generate_surveyjs_json_working <- function(method_results, prepared_data, boundary_tables,
                                            admin_sequence, item_definitions, survey_config,
@@ -1192,7 +1201,11 @@ calculate_dc_boundaries <- function(ordered_items, training_params, cutoff) {
       
       # Validate boundaries
       if (low_boundary[k] < 0) low_boundary[k] <- NA
-      if (high_boundary[k] > k * 3) high_boundary[k] <- NA  # Assuming max item score is 3
+      #if (high_boundary[k] > k * 3) high_boundary[k] <- NA  # Assuming max item score is 3
+      max_score_at_k <- sum(sapply(ordered_items[1:k], function(x) {
+        if (!is.null(item_ranges[[x]])) item_ranges[[x]][2] else 3
+      }))
+      if (high_boundary[k] > max_score_at_k) high_boundary[k] <- NA
       
       # VALIDATION: Check for logical consistency
       if (!is.na(low_boundary[k]) && !is.na(high_boundary[k])) {
