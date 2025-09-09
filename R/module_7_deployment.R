@@ -1444,7 +1444,10 @@ calculate_sc_boundaries <- function(ordered_items, training_params, method,
       if (k <= length(models) && !is.null(models[[k]])) {
         
         # Search for boundary where P(low) >= gamma_0 and P(high) >= gamma_1
-        max_possible_score <- k * 3  # Assuming max item score is 3
+        #max_possible_score <- k * 3  # Assuming max item score is 3
+        max_possible_score <- sum(sapply(ordered_items[1:k], function(x) {
+          if (!is.null(item_ranges[[x]])) item_ranges[[x]][2] else 3
+        }))
         
         low_candidates <- c()
         high_candidates <- c()
