@@ -1353,7 +1353,10 @@ calculate_sc_boundaries <- function(ordered_items, training_params, method,
             high_support_strength <- length(high_candidates)
             
             # Also consider how extreme the boundaries are relative to possible scores
-            max_possible_at_k <- k * 3  # Assuming max item score is 3
+            #max_possible_at_k <- k * 3  # Assuming max item score is 3
+            max_possible_at_k <- sum(sapply(ordered_items[1:k], function(x) {
+              if (!is.null(item_ranges[[x]])) item_ranges[[x]][2] else 3
+            }))
             low_extremity <- low_boundary[k] / max_possible_at_k
             high_extremity <- high_boundary[k] / max_possible_at_k
             
