@@ -1953,8 +1953,11 @@ generate_administration_sequence <- function(method_results, prepared_data, item
 #' }
 
 #' Generate Pattern Visibility with Affirmative Logic
+# generate_pattern_visibility_affirmative <- function(prev_items, pattern_rules, 
+#                                                     stop_low_only = FALSE) {
 generate_pattern_visibility_affirmative <- function(prev_items, pattern_rules, 
-                                                    stop_low_only = FALSE) {
+                                                    stop_low_only = FALSE, 
+                                                    training_params = NULL) {
   
   if (length(prev_items) == 0 || is.null(pattern_rules)) {
     return(NULL)
@@ -1964,13 +1967,50 @@ generate_pattern_visibility_affirmative <- function(prev_items, pattern_rules,
   all_patterns <- character()
   n_items <- length(prev_items)
   
-  # Generate all possible patterns (0-3 for each item)
-  for (i in 0:(4^n_items - 1)) {
+  # # Generate all possible patterns (0-3 for each item)
+  # for (i in 0:(4^n_items - 1)) {
+  #   pattern <- numeric(n_items)
+  #   temp <- i
+  #   for (j in 1:n_items) {
+  #     pattern[j] <- temp %% 4
+  #     temp <- temp %/% 4
+  #   }
+  #   all_patterns <- c(all_patterns, paste(pattern, collapse="_"))
+  # }
+  
+  # Get actual ranges for each item
+  item_bases <- numeric(n_items)
+  for (j in 1:n_items) {
+    item_id <- prev_items[j]
+    if (!is.null(pattern_rules$items_included) && j <= length(pattern_rules$items_included)) {
+      item_id <- pattern_rules$items_included[j]
+    }
+    
+    # Get the range for this item
+    if (!is.null(training_params$item_ranges[[item_id]])) {
+      item_range <- training_params$item_ranges[[item_id]]
+      item_bases[j] <- item_range[2] - item_range[1] + 1
+    } else {
+      item_bases[j] <- 4  # Default to 0-3 (4 values)
+    }
+  }
+  
+  # Calculate total number of patterns
+  total_patterns <- prod(item_bases)
+  
+  # Generate all possible patterns with correct ranges
+  for (i in 0:(total_patterns - 1)) {
     pattern <- numeric(n_items)
     temp <- i
     for (j in 1:n_items) {
-      pattern[j] <- temp %% 4
-      temp <- temp %/% 4
+      item_id <- prev_items[j]
+      if (!is.null(training_params$item_ranges[[item_id]])) {
+        min_val <- training_params$item_ranges[[item_id]][1]
+        pattern[j] <- min_val + (temp %% item_bases[j])
+      } else {
+        pattern[j] <- temp %% item_bases[j]  # Default assumes 0-based
+      }
+      temp <- temp %/% item_bases[j]
     }
     all_patterns <- c(all_patterns, paste(pattern, collapse="_"))
   }
@@ -2072,6 +2112,16 @@ generate_surveyjs_json <- function(method_results, prepared_data, boundary_table
     if (use_patterns) {
       # survey$pages <- generate_multi_construct_pages_patterns(
       # survey$pages <- generate_multi_construct_pages_patterns_fixed(
+      # survey$pages <- generate_multi_construct_pages_patterns_fixed_v2(
+      #   admin_sequence,
+      #   pattern_rules,
+      #   item_definitions,
+      #   survey_config,
+      #   prepared_data$config,
+      #   method_results,
+      #   reduction_method,
+      #   stop_low_only
+      # )
       survey$pages <- generate_multi_construct_pages_patterns_fixed_v2(
         admin_sequence,
         pattern_rules,
@@ -2080,7 +2130,8 @@ generate_surveyjs_json <- function(method_results, prepared_data, boundary_table
         prepared_data$config,
         method_results,
         reduction_method,
-        stop_low_only
+        stop_low_only,
+        training_params
       )
     } else {
       survey$pages <- generate_multi_construct_pages(
@@ -2409,10 +2460,15 @@ generate_unidimensional_pages_patterns <- function(admin_sequence, pattern_rules
 #' Generate Multi-Construct Pages with CUMULATIVE Pattern Checking
 #'
 #' This version properly accumulates stop conditions across all previous positions
+# generate_multi_construct_pages_patterns_fixed_v2 <- function(admin_sequence, pattern_rules,
+#                                                              item_definitions, survey_config,
+#                                                              data_config, method_results,
+#                                                              reduction_method, stop_low_only) {
 generate_multi_construct_pages_patterns_fixed_v2 <- function(admin_sequence, pattern_rules,
                                                              item_definitions, survey_config,
                                                              data_config, method_results,
-                                                             reduction_method, stop_low_only) {
+                                                             reduction_method, stop_low_only,
+                                                             training_params = NULL) {
   pages <- list()
   
   # Track items seen by construct
@@ -2460,11 +2516,19 @@ generate_multi_construct_pages_patterns_fixed_v2 <- function(admin_sequence, pat
       
       # Get the pattern rules for the current position (k-1 items)
       position_to_check <- length(prev_construct_items)
+      # if (position_to_check <= length(pattern_rules[[item_construct]])) {
+      #   visibility_condition <- generate_pattern_visibility_affirmative(
+      #     prev_items = prev_construct_items,
+      #     pattern_rules = pattern_rules[[item_construct]][[position_to_check]],
+      #     stop_low_only = stop_low_only
+      #   )
+      # }
       if (position_to_check <= length(pattern_rules[[item_construct]])) {
         visibility_condition <- generate_pattern_visibility_affirmative(
           prev_items = prev_construct_items,
           pattern_rules = pattern_rules[[item_construct]][[position_to_check]],
-          stop_low_only = stop_low_only
+          stop_low_only = stop_low_only,
+          training_params
         )
       }
       
