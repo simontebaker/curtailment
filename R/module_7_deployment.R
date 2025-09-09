@@ -1121,8 +1121,7 @@ generate_single_boundary_table <- function(ordered_items, config, training_param
     
   } else if (reduction == "dc") {
     # Deterministic curtailment
-    #boundaries <- calculate_dc_boundaries(ordered_items, training_params, cutoff)
-    boundaries <- calculate_dc_boundaries(ordered_items, training_params, cutoff, item_ranges)
+    boundaries <- calculate_dc_boundaries(ordered_items, training_params, cutoff)
     
     for (k in 1:n_items) {
       boundary_df$items_included[k] <- paste(ordered_items[1:k], collapse = ", ")
@@ -1154,13 +1153,9 @@ generate_single_boundary_table <- function(ordered_items, config, training_param
     
   } else if (reduction %in% c("sc_sor", "sc_mor") && gamma_0_valid && gamma_1_valid) {
     # Stochastic curtailment with regression - keep existing logic
-    # boundaries <- calculate_sc_boundaries(
-    #   ordered_items, training_params, reduction,
-    #   gamma_0, gamma_1, cutoff
-    # )
     boundaries <- calculate_sc_boundaries(
       ordered_items, training_params, reduction,
-      gamma_0, gamma_1, cutoff, item_ranges
+      gamma_0, gamma_1, cutoff
     )
     
     for (k in 1:n_items) {
@@ -1218,8 +1213,7 @@ generate_single_boundary_table <- function(ordered_items, config, training_param
 #' @param training_params Training parameters
 #' @param cutoff Classification cutoff
 #' @return List with low and high boundaries
-#calculate_dc_boundaries <- function(ordered_items, training_params, cutoff) {
-calculate_dc_boundaries <- function(ordered_items, training_params, cutoff, item_ranges = NULL) {
+calculate_dc_boundaries <- function(ordered_items, training_params, cutoff) {
   
   n_items <- length(ordered_items)
   low_boundary <- rep(NA, n_items)
@@ -1291,10 +1285,8 @@ calculate_dc_boundaries <- function(ordered_items, training_params, cutoff, item
 #' @param gamma_1 High-risk threshold
 #' @param cutoff Classification cutoff
 #' @return List with low and high boundaries
-#calculate_sc_boundaries <- function(ordered_items, training_params, method,
-#                                    gamma_0, gamma_1, cutoff) {
 calculate_sc_boundaries <- function(ordered_items, training_params, method,
-                                    gamma_0, gamma_1, cutoff, item_ranges = NULL) {
+                                   gamma_0, gamma_1, cutoff) {
   
   n_items <- length(ordered_items)
   low_boundary <- rep(NA, n_items)
