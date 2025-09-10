@@ -305,17 +305,17 @@ generate_surveyjs_json_working <- function(method_results, prepared_data, bounda
     }
   }
   
-  # Add completion page
-  survey$pages[[length(survey$pages) + 1]] <- list(
-    name = "completion",
-    elements = list(
-      list(
-        type = "html",
-        name = "completion_message",
-        html = "<h3>Thank you for completing the assessment</h3>"
-      )
-    )
-  )
+  # # Add completion page
+  # survey$pages[[length(survey$pages) + 1]] <- list(
+  #   name = "completion",
+  #   elements = list(
+  #     list(
+  #       type = "html",
+  #       name = "completion_message",
+  #       html = "<h3>Thank you for completing the assessment</h3>"
+  #     )
+  #   )
+  # )
   
   # Survey settings
   survey$clearInvisibleValues = "none"
@@ -2197,17 +2197,17 @@ generate_surveyjs_json <- function(method_results, prepared_data, boundary_table
     }
   }
   
-  # Add completion page
-  survey$pages[[length(survey$pages) + 1]] <- list(
-    name = "completion",
-    elements = list(
-      list(
-        type = "html",
-        name = "completion_message",
-        html = "<h3>Thank you for completing the assessment</h3>"
-      )
-    )
-  )
+  # # Add completion page
+  # survey$pages[[length(survey$pages) + 1]] <- list(
+  #   name = "completion",
+  #   elements = list(
+  #     list(
+  #       type = "html",
+  #       name = "completion_message",
+  #       html = "<h3>Thank you for completing the assessment</h3>"
+  #     )
+  #   )
+  # )
   
   # Add survey-level settings
   survey$questionErrorLocation = "bottom"
