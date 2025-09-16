@@ -728,7 +728,7 @@ for (i in 1:100) {
 }
 
 survey_config = list(
-  title = "PID-5-SF",
+  title = "PID-5-Dynamic",
   description = "This is a list of things different people might say about themselves. We are interested in how you would describe yourself. There are no right or wrong answers, so you can describe yourself as honestly as possible. We'd like you to take your time and read each statement carefully, selecting the response that best describes you.",
   autoGenerate = FALSE,
   displayMode = "buttons"
