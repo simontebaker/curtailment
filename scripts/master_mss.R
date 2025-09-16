@@ -1282,7 +1282,7 @@ item_definitions <- list(
 )
 
 survey_config = list(
-  title = "MSS",
+  title = "MSS-Dynamic",
   description = "Below are statements that you might agree or disagree with. Please read each statement and indicate your level of agreement. Try not to spend too much time on a single question or be overly factual in your responses, rather base your answers on what you intuitively feel.",
   autoGenerate = FALSE,
   displayMode = "buttons"
