@@ -204,10 +204,10 @@ cat("======================================\n\n")
 cat("Creating analysis configuration...\n\n")
 config_module_2 <- create_analysis_config(
   questionnaire_type = prepared_data$config$questionnaire_type,
-  ordering_methods = c("original", "auc", "incremental_auc"),
-  reduction_methods = c("none", "sc_ep"),
+  ordering_methods = c("original", "auc", "incremental_auc", "correlation", "forward_stepwise", "irt"), # ordering_methods = c("original", "auc", "incremental_auc"),
+  reduction_methods = c("dc", "sc_ep"), # reduction_methods = c("none", "sc_ep"),
   two_step_mode = TRUE,
-  top_candidates = 6,
+  top_candidates = 12,
   constraints = list(
     stop_low_only = TRUE,
     min_items_per_construct = 1,
