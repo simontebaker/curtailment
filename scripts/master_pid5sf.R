@@ -237,10 +237,10 @@ cat("======================================\n\n")
 cat("Creating analysis configuration...\n\n")
 config_module_2 <- create_analysis_config(
   questionnaire_type = prepared_data$config$questionnaire_type,
-  ordering_methods = c("original", "auc", "incremental_auc"),
-  reduction_methods = c("none", "sc_ep"),
+  ordering_methods = c("original", "auc", "incremental_auc", "correlation", "forward_stepwise", "irt"), # ordering_methods = c("original", "auc", "incremental_auc"),
+  reduction_methods = c("dc", "sc_ep"), # reduction_methods = c("none", "sc_ep"),
   two_step_mode = TRUE,
-  top_candidates = 6,
+  top_candidates = 12,
   constraints = list(
     stop_low_only = TRUE,
     min_items_per_construct = 1,
@@ -728,7 +728,7 @@ for (i in 1:100) {
 }
 
 survey_config = list(
-  title = "PID-5-Dynamic",
+  title = "PID-5-A", # title = "PID-5-Dynamic",
   description = "This is a list of things different people might say about themselves. We are interested in how you would describe yourself. There are no right or wrong answers, so you can describe yourself as honestly as possible. We'd like you to take your time and read each statement carefully, selecting the response that best describes you.",
   autoGenerate = FALSE,
   displayMode = "buttons"
