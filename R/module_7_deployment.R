@@ -190,7 +190,7 @@ generate_surveyjs_json_working <- function(method_results, prepared_data, bounda
     
     # Get construct gammas
     construct_gammas <- method_results$combination$construct_gammas
-    min_items_per_construct <- method_results$reduction_result$constraints_applied$min_items_per_construct %||% 0
+    min_items_per_construct <- method_results$reduction_result$constraints_applied$min_items_per_construct %||% 1
     
     # Track items by construct
     construct_items_seen <- list()
@@ -217,7 +217,7 @@ generate_surveyjs_json_working <- function(method_results, prepared_data, bounda
       }
       
       # Add stop patterns ONLY if this position can trigger stops
-      if (within_construct_pos > 1 && within_construct_pos > min_items_per_construct) {
+      if (within_construct_pos >= min_items_per_construct) {
         gamma_0 <- construct_gammas[[item_construct]]$gamma_0
         gamma_1 <- construct_gammas[[item_construct]]$gamma_1
         
