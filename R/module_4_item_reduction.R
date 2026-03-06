@@ -374,27 +374,21 @@ reduce_dc <- function(ordered_items, data, config, method_params, cutoff,
     for (j in seq_along(ordered_items)) {
       item <- ordered_items[j]
       
-      # Check construct constraints for multi-construct
-      if (config$questionnaire_type == "multi-construct") {
-        if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
-          # Must administer this item due to constraints
-          items_administered[i, j] <- TRUE
-          items_given <- c(items_given, item)
-          if (item %in% names(data) && !is.na(data[i, item])) {
-            current_sum <- current_sum + data[i, item]
-          }
-          next
-        }
-      }
-      
-      # Administer item
+      # Always administer the item first
       items_administered[i, j] <- TRUE
       items_given <- c(items_given, item)
-      
+
       if (item %in% names(data) && !is.na(data[i, item])) {
         current_sum <- current_sum + data[i, item]
       }
-      
+
+      # Check construct constraints AFTER admin
+      if (config$questionnaire_type == "multi-construct") {
+        if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
+          next  # Haven't met minimum items for this construct yet - skip stopping check
+        }
+      }
+
       # Calculate bounds on possible total score
       if (j < n_items) {
         remaining_items <- ordered_items[(j+1):n_items]
@@ -614,33 +608,25 @@ reduce_sc_ep <- function(ordered_items, data, config, method_params, cutoff,
     for (j in seq_along(ordered_items)) {
       item <- ordered_items[j]
       
-      # Check construct constraints
-      if (config$questionnaire_type == "multi-construct") {
-        if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
-          # Must administer this item due to constraints
-          items_administered[i, j] <- TRUE
-          items_given <- c(items_given, item)
-          items_count <- items_count + 1  # INCREMENT COUNTER
-          
-          if (item %in% names(data) && !is.na(data[i, item])) {
-            responses <- c(responses, data[i, item])
-          }
-          next  # Skip stopping check for this item
-        }
-      }
-      
-      # Administer item j
+      # Always administer the item first
       items_administered[i, j] <- TRUE
       items_given <- c(items_given, item)
       items_count <- items_count + 1  # INCREMENT COUNTER
-      
+
       if (item %in% names(data) && !is.na(data[i, item])) {
         responses <- c(responses, data[i, item])
       }
-      
+
+      # Check construct constraints AFTER admin
+      if (config$questionnaire_type == "multi-construct") {
+        if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
+          next  # Haven't met minimum items for this construct yet - skip stopping check
+        }
+      }
+
       # After administering item j, we have j responses
       # Check if we should stop based on the pattern so far
-      
+
       # Look up conditional probabilities for pattern of length j
       response_pattern <- paste(responses, collapse = "_")
       
@@ -941,26 +927,21 @@ reduce_sc_sor <- function(ordered_items, data, config, method_params, cutoff,
     for (j in seq_along(ordered_items)) {
       item <- ordered_items[j]
       
-      # Check construct constraints
-      if (config$questionnaire_type == "multi-construct") {
-        if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
-          items_administered[i, j] <- TRUE
-          items_given <- c(items_given, item)
-          if (item %in% names(data) && !is.na(data[i, item])) {
-            current_sum <- current_sum + data[i, item]
-          }
-          next
-        }
-      }
-      
-      # Administer item
+      # Always administer the item first
       items_administered[i, j] <- TRUE
       items_given <- c(items_given, item)
-      
+
       if (item %in% names(data) && !is.na(data[i, item])) {
         current_sum <- current_sum + data[i, item]
       }
-      
+
+      # Check construct constraints AFTER admin
+      if (config$questionnaire_type == "multi-construct") {
+        if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
+          next  # Haven't met minimum items for this construct yet - skip stopping check
+        }
+      }
+
       # Use model to predict probabilities
       if (j <= length(models) && !is.null(models[[j]])) {
         pred_probs <- predict_ordinal_probs(models[[j]], current_sum, j)
@@ -1241,26 +1222,21 @@ reduce_sc_mor <- function(ordered_items, data, config, method_params, cutoff,
     for (j in seq_along(ordered_items)) {
       item <- ordered_items[j]
       
-      # Check construct constraints
-      if (config$questionnaire_type == "multi-construct") {
-        if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
-          items_administered[i, j] <- TRUE
-          items_given <- c(items_given, item)
-          if (item %in% names(data) && !is.na(data[i, item])) {
-            responses[[item]] <- data[i, item]
-          }
-          next
-        }
-      }
-      
-      # Administer item
+      # Always administer the item first
       items_administered[i, j] <- TRUE
       items_given <- c(items_given, item)
-      
+
       if (item %in% names(data) && !is.na(data[i, item])) {
         responses[[item]] <- data[i, item]
       }
-      
+
+      # Check construct constraints AFTER admin
+      if (config$questionnaire_type == "multi-construct") {
+        if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
+          next  # Haven't met minimum items for this construct yet - skip stopping check
+        }
+      }
+
       # Use model to predict probabilities
       if (j <= length(models) && !is.null(models[[j]])) {
         pred_probs <- predict_ordinal_probs_multiple(models[[j]], responses, items_given)
@@ -1371,28 +1347,23 @@ reduce_irt_cct <- function(ordered_items, data, config, method_params, cutoff,
     for (j in seq_along(ordered_items)) {
       item <- ordered_items[j]
       
-      # Check construct constraints
-      if (config$questionnaire_type == "multi-construct") {
-        if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
-          items_administered[i, j] <- TRUE
-          items_given <- c(items_given, item)
-          if (item %in% names(data) && !is.na(data[i, item])) {
-            responses <- c(responses, data[i, item])
-          }
-          next
-        }
-      }
-      
-      # Administer item
+      # Always administer the item first
       items_administered[i, j] <- TRUE
       items_given <- c(items_given, item)
-      
+
       if (item %in% names(data) && !is.na(data[i, item])) {
         responses <- c(responses, data[i, item])
       } else {
         responses <- c(responses, NA)
       }
-      
+
+      # Check construct constraints AFTER admin
+      if (config$questionnaire_type == "multi-construct") {
+        if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
+          next  # Haven't met minimum items for this construct yet - skip stopping check
+        }
+      }
+
       # Update theta estimate if we have enough responses
       if (length(which(!is.na(responses))) >= 3) {
         theta_update <- update_theta_estimate(irt_model, items_given, responses)
@@ -1506,25 +1477,19 @@ reduce_dc_integrated <- function(ordered_items, data, config, method_params, cut
         next
       }
       
-      # Check construct constraints
-      if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
-        # Must administer this item due to constraints
-        items_administered[i, j] <- TRUE
-        items_given <- c(items_given, item)
-        if (item %in% names(data) && !is.na(data[i, item])) {
-          current_sum <- current_sum + data[i, item]
-        }
-        next
-      }
-      
-      # Administer item
+      # Always administer the item first
       items_administered[i, j] <- TRUE
       items_given <- c(items_given, item)
-      
+
       if (item %in% names(data) && !is.na(data[i, item])) {
         current_sum <- current_sum + data[i, item]
       }
-      
+
+      # Check construct constraints AFTER admin
+      if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
+        next  # Haven't met minimum items for this construct yet - skip stopping check
+      }
+
       # Calculate bounds on possible total score
       if (j < n_items) {
         remaining_items <- ordered_items[(j+1):n_items]
@@ -1788,29 +1753,22 @@ reduce_sc_ep_integrated <- function(ordered_items, data, config, method_params, 
         next
       }
       
-      # Check construct constraints
-      if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
-        items_administered[i, j] <- TRUE
-        items_given <- c(items_given, item)
-        items_count <- items_count + 1  # INCREMENT COUNTER
-        
-        if (item %in% names(data) && !is.na(data[i, item])) {
-          responses <- c(responses, data[i, item])
-        }
-        next
-      }
-      
-      # Administer item j
+      # Always administer the item first
       items_administered[i, j] <- TRUE
       items_given <- c(items_given, item)
       items_count <- items_count + 1  # INCREMENT COUNTER
-      
+
       if (item %in% names(data) && !is.na(data[i, item])) {
         responses <- c(responses, data[i, item])
       }
-      
+
+      # Check construct constraints AFTER admin
+      if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
+        next  # Haven't met minimum items for this construct yet - skip stopping check
+      }
+
       # After administering item j, check if we should stop
-      
+
       # Look up conditional probabilities for pattern of length j
       response_pattern <- paste(responses, collapse = "_")
       
@@ -2142,32 +2100,27 @@ reduce_sc_sor_integrated <- function(ordered_items, data, config, method_params,
         next
       }
       
-      # Check construct constraints
-      if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
-        items_administered[i, j] <- TRUE
-        items_given <- c(items_given, item)
-        if (item %in% names(data) && !is.na(data[i, item])) {
-          current_sum <- current_sum + data[i, item]
-        }
-        next
-      }
-      
-      # Administer item
+      # Always administer the item first
       items_administered[i, j] <- TRUE
       items_given <- c(items_given, item)
-      
+
       if (item %in% names(data) && !is.na(data[i, item])) {
         current_sum <- current_sum + data[i, item]
       }
-      
+
+      # Check construct constraints AFTER admin
+      if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
+        next  # Haven't met minimum items for this construct yet - skip stopping check
+      }
+
       # Use model to predict probabilities
       if (j <= length(models) && !is.null(models[[j]])) {
         pred_probs <- predict_ordinal_probs(models[[j]], current_sum, j)
-        
+
         # Check stopping criteria with NA handling
         prob_low <- pred_probs["prob_low"]
         prob_high <- pred_probs["prob_high"]
-        
+
         if (!is.na(prob_low) && prob_low >= gamma_0) {
           classifications[i] <- 0
           stopped_at[i] <- j
@@ -2478,24 +2431,19 @@ reduce_sc_mor_integrated <- function(ordered_items, data, config, method_params,
         next
       }
       
-      # Check construct constraints
-      if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
-        items_administered[i, j] <- TRUE
-        items_given <- c(items_given, item)
-        if (item %in% names(data) && !is.na(data[i, item])) {
-          responses[[item]] <- data[i, item]
-        }
-        next
-      }
-      
-      # Administer item
+      # Always administer the item first
       items_administered[i, j] <- TRUE
       items_given <- c(items_given, item)
-      
+
       if (item %in% names(data) && !is.na(data[i, item])) {
         responses[[item]] <- data[i, item]
       }
-      
+
+      # Check construct constraints AFTER admin
+      if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
+        next  # Haven't met minimum items for this construct yet - skip stopping check
+      }
+
       # Use model to predict probabilities
       if (j <= length(models) && !is.null(models[[j]])) {
         pred_probs <- predict_ordinal_probs_multiple(models[[j]], responses, items_given)
@@ -2627,26 +2575,21 @@ reduce_irt_cct_integrated <- function(ordered_items, data, config, method_params
         next
       }
       
-      # Check construct constraints
-      if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
-        items_administered[i, j] <- TRUE
-        items_given <- c(items_given, item)
-        if (item %in% names(data) && !is.na(data[i, item])) {
-          responses <- c(responses, data[i, item])
-        }
-        next
-      }
-      
-      # Administer item
+      # Always administer the item first
       items_administered[i, j] <- TRUE
       items_given <- c(items_given, item)
-      
+
       if (item %in% names(data) && !is.na(data[i, item])) {
         responses <- c(responses, data[i, item])
       } else {
         responses <- c(responses, NA)
       }
-      
+
+      # Check construct constraints AFTER admin
+      if (!check_construct_constraints(items_given, item, config, min_items_per_construct)) {
+        next  # Haven't met minimum items for this construct yet - skip stopping check
+      }
+
       # Update theta estimate if we have enough responses
       if (length(which(!is.na(responses))) >= 3) {
         theta_update <- update_theta_estimate(irt_model, items_given, responses)
